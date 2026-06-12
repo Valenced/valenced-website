@@ -1,0 +1,155 @@
+---
+title: generate-index
+description: Build the repository index.json from a set of plugin ZIP files.
+icon: FileJson
+---
+
+`valenced-plugin generate-index` reads your packaged plugin ZIP files, validates their manifests, and writes the `index.json` repository file.
+
+The Valenced client fetches this file to let users browse plugins, resolve dependencies, and check for updates.
+
+```sh
+valenced-plugin generate-index (--dist <dir> --base-url <url> | --releases <file>) [--out <file>]
+```
+
+## Flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dist <dir>` | | Directory that holds the plugin ZIPs. See [pool mode](#pool-mode). Needs `--base-url`. |
+| `--base-url <url>` | | Base URL that each artifact filename is appended to. |
+| `--releases <file>` | | Path to a JSON descriptor. See [descriptor mode](#descriptor-mode). |
+| `--out <file>` | `index.json` | Where to write `index.json`. Missing parent folders are created. |
+| `--help`, `-h` | | Show help. |
+
+## Pool mode
+
+A pool is a flat directory of every version you published, and it is the recommended layout. Serve it under one URL prefix, such as a branch published with GitHub Pages, an S3 bucket, or any static web server:
+
+```sh
+valenced-plugin generate-index --dist published/pool --base-url https://you.github.io/repo/pool
+```
+
+The command scans the directory for `.zip` files and appends each filename to the base URL. Artifacts are sorted by filename, so the output is reproducible.
+
+Each artifact is named `<id>@<version>.zip`, for example `com.example.plugin@1.1.0.zip`. The `@` character appears in neither the plugin ID charset nor the version charset, so the two halves are always unambiguous and every version of a plugin lives beside the others in one directory.
+
+<Callout title="The pool is the record of what you published">
+    The index is a pure function of the pool. To unpublish a version, delete its file and generate the index again. To republish it, put the file back. Nothing else records the state, so the index can never disagree with what your users can download.
+</Callout>
+
+### Artifact integrity
+
+When a filename claims an ID and a version, the manifest inside must agree:
+
+```text
+pool/com.example.plugin@1.1.0.zip: named com.example.plugin@1.1.0, but holds com.example.plugin@1.0.0
+```
+
+Without this check, a mislabelled file would be served under a version it does not contain, and the client would install the wrong plugin.
+
+## Descriptor mode
+
+Use descriptor mode when your artifacts are not served from one URL prefix. Write a JSON file that maps each local ZIP to its public download URL:
+
+```json title="releases.json"
+[
+    {
+        "file": "artifacts/com.example.plugin@1.1.0.zip",
+        "url": "https://example.com/downloads/abc123/com.example.plugin@1.1.0.zip"
+    }
+]
+```
+
+Then pass `--releases`:
+
+```sh
+valenced-plugin generate-index --releases releases.json --out public/index.json
+```
+
+This mode keeps the command free of any Git host API. Whatever collects the artifacts writes the descriptor, and the command only reads local files.
+
+## Generated index structure
+
+```json title="index.json"
+{
+    "format": 1,
+    "name": "My Plugin Repository",
+    "description": "Example plugin repository from the Valenced plugin template.",
+    "plugins": {
+        "com.example.plugin": {
+            "name": "Example Plugin",
+            "description": "An example Valenced plugin built from the template.",
+            "author": "Your Name <123456789012345678> (https://example.com)",
+            "contributors": ["Someone Else <876543210987654321>"],
+            "channels": {
+                "latest": "1.0.0"
+            },
+            "versions": {
+                "1.0.0": {
+                    "url": "https://you.github.io/repo/pool/com.example.plugin@1.0.0.zip",
+                    "sha256": "c960e5c37ad83710735d7f983c1a562303999314c91382d1f88ad763b997856b",
+                    "size": 5000,
+                    "dependencies": {
+                        "valenced.api": { "version": ">=1 <2" },
+                        "discord": { "version": "*" }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+For each artifact, the command reads `manifest.json`, computes the SHA-256 checksum, and records the size in bytes. The client verifies that checksum on download.
+
+## Customizing repository metadata
+
+Put a `repo.config.json` in the working directory to set the repository name, description and icon, or to override channels:
+
+```json title="repo.config.json"
+{
+    "name": "My Plugin Repository",
+    "description": "Custom plugins maintained by me.",
+    "icon": "https://example.com/icon.png",
+    "channels": {
+        "com.example.plugin": {
+            "latest": "1.1.4",
+            "lts": "1.0.9"
+        }
+    }
+}
+```
+
+## Release channels
+
+A channel is a named pointer to one version. A user picks a channel when installing, such as `latest` or `beta`, and the client follows that pointer for updates.
+
+Two channels are computed for you:
+
+- **`latest`** is the highest version with no prerelease label. `1.2.0` qualifies, `1.3.0-beta` does not.
+- **`beta`** is the newest version overall. It is written only when it differs from `latest`, so a stable newest release leaves it out.
+
+You can override channels in `repo.config.json`:
+
+- An override always wins over a computed channel.
+- Every channel must point at a version that exists, or generation fails.
+- A channel name carries no meaning of its own. An `lts` channel is one you point at a release for longer.
+- Dependencies never name a channel. They constrain versions, so plugins resolve across channels.
+
+To hold back a bad release or promote a beta, move the pointer and generate the index again. No ZIP is rebuilt or re-uploaded.
+
+## Strict manifest validation
+
+Every manifest is validated during generation, so a broken plugin cannot enter your index:
+
+| Rule | Requirement |
+| --- | --- |
+| Manifest format | `format` must be `1`. |
+| Plugin ID | Letters, numbers, dots and hyphens only, with no `..` and no leading dot. |
+| Version | Must follow the Valenced [version format](/docs/plugin-development/getting-started/your-first-plugin#version-format). |
+| Core dependencies | Every manifest must declare `valenced.api` and `discord`. |
+| Required dependencies | Neither `valenced.api` nor `discord` may be optional. |
+| Dependency IDs | Must follow the plugin ID rules. |
+| Icons | A Discord asset name or an inline `data:` URI. Remote HTTP URLs are rejected. |
+| Artifact name | A `<id>@<version>.zip` name must match the manifest inside. |

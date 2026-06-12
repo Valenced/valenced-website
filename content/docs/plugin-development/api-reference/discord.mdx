@@ -1,0 +1,221 @@
+---
+title: Discord
+description: High-level APIs for Discord actions, design system, Flux, settings, and native modules.
+icon: MessageCircle
+---
+
+`@valenced/discord` exposes curated bindings to Discord internal systems.
+
+## Actions (`@valenced/discord/actions`)
+
+Action creators for UI modals and overlays:
+
+```tsx
+import {
+    ActionSheetActionCreators,
+    AlertActionCreators,
+    ToastActionCreators,
+} from '@valenced/discord/actions'
+
+// Show toast
+ToastActionCreators.open('my-plugin-toast', {
+    text: 'Plugin notification',
+    icon: SomeIcon,
+    variant: 'success', // 'default', 'success', or 'critical'
+})
+// Discord before 350204 takes one object instead: open({ key, content, IconComponent })
+
+// Show alert modal
+AlertActionCreators.openAlert(
+    'my-plugin-alert',
+    <AlertModal
+        title="Notice"
+        content="Operation completed"
+        actions={<AlertActionButton text="Okay" />}
+    />,
+)
+
+// Open action sheet
+ActionSheetActionCreators.openLazy(
+    Promise.resolve({ default: MySheet }),
+    'my-plugin-sheet',
+)
+ActionSheetActionCreators.hideActionSheet('my-plugin-sheet')
+```
+
+## Design system (`@valenced/discord/design`)
+
+Discord component library exports:
+
+```tsx
+import { Design } from '@valenced/discord/design'
+
+const {
+    // Layout and text
+    Stack, Card, Text,
+    // Tables
+    TableRow, TableRowGroup, TableSwitchRow, TableCheckboxRow,
+    TableRadioGroup, TableRadioRow,
+    // Inputs
+    Button, IconButton, ImageButton, TextInput, TextField, TextArea, Slider,
+    Checkbox,
+    // Overlays
+    ActionSheet, ActionSheetRow, ActionSheetSwitchRow,
+    AlertModal, AlertActionButton, BottomSheet, BottomSheetTitleHeader,
+    ContextMenu, ContextMenuItem,
+    // Navigation
+    NavigatorHeader, LayerScope,
+    Tabs, SegmentedControl, SegmentedControlPages, useSegmentedControlState,
+    // Styles
+    createStyles, useTooltip,
+} = Design
+```
+
+```tsx
+function SettingRow({ enabled, setEnabled }) {
+    return (
+        <Design.TableRowGroup title="My Plugin">
+            <Design.TableSwitchRow
+                label="Enable feature"
+                subLabel="Toggles custom behavior"
+                value={enabled}
+                onValueChange={setEnabled}
+            />
+        </Design.TableRowGroup>
+    )
+}
+```
+
+The bare switch component is also exported as `FormSwitch`. For a checkbox with a `disabled` state, use [`Checkbox`](/docs/plugin-development/api-reference/components#checkbox) from `@valenced/components`.
+
+`@valenced/discord/design` also exports `FormRadio`, the bare radio button. It takes `selected: boolean | null`.
+
+Some layout traps:
+
+- `Stack` sets `width: '100%'` on itself. In a horizontal stack, a nested `Stack` takes the full width and pushes its siblings out. Give fixed-size parts `style={{ width: 'auto' }}`, and the part that should fill `flex: 1`.
+- `SegmentedControlPages` keeps pages that aren't shown mounted with `display: none`. A `FlashList` in such a page measures zero and stays empty once shown. Mount the list only after `onPageChange` reports its page.
+
+## Flux (`@valenced/discord/flux`)
+
+Access Flux stores and intercept dispatcher events.
+
+### Stores
+
+```ts
+import { Stores, getStore } from '@valenced/discord/flux'
+
+// Access store via proxy (lazy lookup)
+const UserStore = Stores.UserStore
+UserStore.getCurrentUser()
+
+// Lazy callback lookup for uninitialized stores
+const cancel = getStore<{ getCurrentUser(): User }>('UserStore', store => {
+    console.log(store.getCurrentUser())
+})
+```
+
+### Event interception
+
+```ts
+import {
+    onFluxEventDispatched,
+    onAnyFluxEventDispatched,
+} from '@valenced/discord/flux'
+
+// Block event dispatch
+const unsub = onFluxEventDispatched('TYPING_START', () => {})
+
+// Mutate event payload
+onFluxEventDispatched('TYPING_START', payload => {
+    payload.channelId = '123456789012345678'
+    return payload
+})
+
+// Listen to all dispatches without mutating
+onAnyFluxEventDispatched(payload => {
+    console.log('dispatch:', payload.type)
+    return payload
+})
+```
+
+## Settings (`@valenced/discord/modules/settings`)
+
+Registers routes and sections in Discord's native settings navigator:
+
+```tsx
+import {
+    onSettingsModulesLoaded,
+    registerSettingsSection,
+    registerSettingsItem,
+} from '@valenced/discord/modules/settings'
+
+start({ cleanup }) {
+    cleanup(
+        onSettingsModulesLoaded(() => {
+            cleanup(
+                registerSettingsSection('MY_PLUGIN', {
+                    label: 'My Plugin',
+                    settings: ['MY_PLUGIN_MAIN'],
+                }),
+                registerSettingsItem('MY_PLUGIN_MAIN', {
+                    type: 'route',
+                    title: () => 'My Plugin',
+                    IconComponent: MyIcon,
+                    screen: {
+                        route: 'MyPluginScreen',
+                        getComponent: () => MyScreen,
+                    },
+                }),
+            )
+        }),
+    )
+}
+```
+
+- Register settings inside `onSettingsModulesLoaded` to defer loading until the user opens settings.
+- For nested settings trees, use `SettingListRenderer` from `@valenced/discord/modules/settings/renderer`.
+
+## Native modules (`@valenced/discord/native`)
+
+Typed wrappers for Discord's React Native native modules:
+
+```ts
+import {
+    CacheModule,
+    FileModule,
+    ClientInfoModule,
+    DeviceModule,
+    ThemeModule,
+    BundleUpdaterManager,
+} from '@valenced/discord/native'
+
+// Reload client
+BundleUpdaterManager.reload()
+
+// File I/O
+await FileModule.writeFile('documents', 'my-plugin/file.txt', 'hello', 'utf8')
+const text = await FileModule.readFile(
+    `${FileModule.getConstants().DocumentsDirPath}/my-plugin/file.txt`,
+    'utf8',
+)
+
+// App metadata
+const version = ClientInfoModule.getConstants().Version
+```
+
+## Common internals (`@valenced/discord/common`)
+
+Common Discord utility classes (available from `init`):
+
+```ts
+import { Logger, Tokens, Constants } from '@valenced/discord/common'
+
+const logger = new Logger('MyPlugin')
+logger.log('initialized') // appears in the in-app Debug Logs screen
+
+Constants.ME // '/channels/@me'
+```
+
+## Main tabs (`@valenced/discord/modules/main_tabs_v2`)
+
+Navigation utilities for interacting with Discord's bottom-tab navigator and main view controllers.

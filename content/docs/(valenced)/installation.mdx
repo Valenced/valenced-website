@@ -1,0 +1,39 @@
+---
+title: Installation
+description: How to install Valenced on your device.
+icon: Download
+---
+
+## Android
+
+Valenced requires Android 7.0 (Nougat) or newer.
+
+1. Download and install the latest [Valenced Manager](https://github.com/Valenced/valenced-manager/releases/latest) APK.
+2. Open Valenced Manager and tap **Install**.
+3. The manager downloads the supported Discord version, patches it with Valenced, and installs it as a separate app.
+4. Open the patched Discord app, log in, and you should see the **Valenced** section in your Discord settings.
+
+Valenced installs **alongside** the official Discord app, so you can keep both on your device.
+
+## Debug builds
+
+### Unrooted Android
+
+1. Head to **Settings > Advanced** in Valenced Manager.
+2. Switch on **Use debug builds**.
+3. Optionally set a custom Discord version number.
+4. Follow the normal installation instructions.
+
+### Rooted Android
+
+If your device is rooted with an Xposed-compatible framework (such as [Vector](https://github.com/JingMatrix/Vector)):
+
+1. Download and install `app-debug.apk` from the latest [Valenced release](https://github.com/Valenced/valenced/releases/latest).
+2. Enable the module in your Xposed manager and select **Discord** as the scoped app.
+3. Force-stop and restart Discord.
+
+With this method, Valenced injects directly into the official Discord app with no separate installation needed.
+
+<Callout title="Discord versions are pinned" type="warning">
+    Each Valenced release targets a **specific Discord version** (the loader and the bundle are tightly coupled and tested together). Keep Discord on the version your Valenced release supports. Updating Discord ahead of Valenced leaves the app unmodified or causes crashes on startup.
+</Callout>

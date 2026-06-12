@@ -1,0 +1,304 @@
+---
+title: The Plugin Template
+description: The structure of the plugin template, and how to add plugins to it.
+icon: FolderTree
+---
+
+The plugin template is a monorepo. A repository can hold multiple plugins, build them together, and publish them to a single plugin repository. You don't need a separate repository for each plugin.
+
+## Repository layout
+
+```text
+plugins/
+├── example-js-plugin/      A JavaScript-only plugin (no native Android code)
+│   ├── manifest.json
+│   └── js/index.ts
+├── example-plugin/         A hybrid plugin (JavaScript + native Kotlin)
+│   ├── manifest.json
+│   ├── tsconfig.json       The plugin's own type-check project
+│   ├── assets/             Extra files shipped in the ZIP
+│   ├── js/index.ts         JavaScript entrypoint
+│   └── src/main/kotlin/    Kotlin source files
+├── example-library/        A plugin other plugins depend on
+└── example-dependent/      A plugin depending on example-library
+themes/
+├── example-background/     Theme backgrounds
+├── example-emoji/          Emoji packs
+├── example-fonts/          Font packs
+└── example-icons/          Icon packs
+.github/
+├── scripts/                Release planning and publishing scripts
+└── workflows/              GitHub Actions CI/CD workflows
+build.gradle.kts            Root Gradle configuration for all plugin modules
+settings.gradle.kts         Dynamic plugin discovery script
+repo.config.json            Repository metadata and channel configuration
+package.json
+```
+
+Each folder under `plugins/` represents one plugin. The directory name serves as a label for build tasks, while the plugin's unique identity is defined by the `id` field in its `manifest.json`.
+
+`themes/` holds [theme plugins](/docs/plugin-development/api-reference/themes). They build and package like the plugins under `plugins/`. Folder names must be unique across both directories.
+
+## Type checking
+
+Give each plugin a `tsconfig.json` that extends the shared settings:
+
+```json title="plugins/my-plugin/tsconfig.json"
+{ "extends": "../../tsconfig.base.json" }
+```
+
+Each plugin is type-checked as its own project. Types one plugin adds, such as a dependency's API types or the hidden types, don't leak into other plugins. A plugin without a `tsconfig.json` isn't type-checked.
+
+## Shipping extra files
+
+Put files your plugin reads at runtime, such as fonts or images, in an `assets/` folder next to `manifest.json`. Packaging copies the folder into the ZIP as `assets/`. See [Plugin files](/docs/plugin-development/api-reference/native#plugin-files) for how to read them.
+
+Native plugins can also put Java resources in `src/main/resources/`. They are packaged into `plugin.jar` as-is, so your code reads them through its class loader.
+
+## Adding a plugin
+
+To add a plugin, create a folder under `plugins/` with a `manifest.json` and an entry file.
+
+Gradle discovers plugin folders and configures native modules automatically. The CLI discovers plugins using the same directory structure when bundling JavaScript.
+
+<Callout type="info" title="Folder names determine Gradle task names">
+    Gradle uses folder names to generate task names. For example, a folder named `my-plugin` creates the task `packageMyPlugin`. Keep folder names in kebab-case.
+</Callout>
+
+## Where the entry file goes
+
+The bundler searches for the entry file in this order, stopping at the first match:
+
+1. `js/index.*`
+2. `src/index.*`
+3. `index.*`
+
+Each step checks for `.ts`, `.tsx`, `.js`, and `.jsx` extensions.
+
+For plugins with native components, keep Kotlin sources in `src/main/` and put the JavaScript entry in `js/` to separate the two source trees. Plugins without a native component can place `index.ts` directly in the plugin root folder.
+
+## The manifest file
+
+Every plugin directory must contain a `manifest.json`. This file serves as the definitive source of truth: the build system, CLI, and client loader all read the plugin ID, version, dependencies, and artifact paths from it.
+
+```json title="plugins/example-js-plugin/manifest.json"
+{
+    "format": 1,
+    "id": "com.example.js-plugin",
+    "name": "Example JS Plugin",
+    "description": "An example plugin.",
+    "author": "You <123456789012345678> (https://example.com)",
+    "contributors": ["Someone Else <876543210987654321>"],
+    "version": "1.0.0",
+    "dependencies": {
+        "valenced.api": { "version": ">=1 <2" },
+        "discord": { "version": "*" }
+    },
+    "dist": {
+        "script": "index.js"
+    }
+}
+```
+
+| Field | Required | Description |
+| --- | :-: | --- |
+| `format` | Yes | Manifest specification version (currently `1`). |
+| `id` | Yes | Unique identifier (letters, numbers, dots, and hyphens only). |
+| `name` | Yes | User-facing display name shown in the client. |
+| `description` | Yes | Short summary of what your plugin does. |
+| `author` | Yes | Creator shown in the UI, in the [contributor format](#contributor-format). |
+| `contributors` | No | List of other contributors, in the same format as `author`. |
+| `version` | Yes | Version string following the Valenced [version format](/docs/plugin-development/getting-started/your-first-plugin#version-format). |
+| `dependencies` | No | Map of plugin IDs and version constraints that this plugin depends on. |
+| `dist` | Yes | Relative paths to compiled artifacts within the final ZIP package. |
+
+<Callout type="warn" title="Plugin IDs are permanent">
+    Repositories and client settings key everything by `id`. If you change a plugin's ID, Valenced treats it as an entirely new plugin rather than an update, which means existing users won't receive updates and will lose their saved settings.
+</Callout>
+
+```ts
+interface PluginManifest {
+    format: number      // manifest format version (currently 1)
+    id: string          // unique identifier
+    name: string
+    author: string           // see "Contributor format"
+    contributors?: string[]  // same format as author
+    description: string
+    icon?: string       // Discord asset name or data: URI
+    version: string     // version string
+    dependencies?: Record<string, PluginDependencyConstraint> // dependencies keyed by plugin ID
+    dist?: PluginDist   // artifact paths inside plugin ZIP
+}
+
+interface PluginDist {
+    script?: string     // path to compiled JS bundle
+    android?: {
+        path: string    // path to compiled Kotlin/Java JAR
+        class: string   // class exposing `plugin { }` instance
+    }
+}
+
+interface PluginDependencyConstraint {
+    version?: string   // version range constraint (e.g. '>=1.0 <2' or '*')
+    optional?: boolean // when true, missing dependency does not block startup
+}
+```
+
+### Contributor format
+
+`author` and each entry of `contributors` use an NPM-like format. Discord user IDs and links are optional and repeatable:
+
+```
+Name <DISCORD_ID_1> <DISCORD_ID_N> (LINK_1) (LINK_N "Label")
+```
+
+- Put every Discord ID before the first link.
+- Links must start with `https://`, `http://` or `mailto:`.
+- A link can have a label in double quotes, such as `(https://github.com/you "GitHub")`. The label replaces the URL in the UI.
+- A plain name such as `"You"` is still valid.
+
+For example:
+
+```json
+"author": "You <123456789012345678> (https://github.com/sponsors/you \"Donations\") (https://example.com \"Website\")"
+```
+
+In the plugin list, the author shows as a button with as many contributor names as fit, such as `You, Someone Else, 2 contributors`. Tap it to open a sheet with a tab for each person.
+Each tab lists that person's Discord profiles and links, at most 5 of each. Tapping a Discord profile opens it over the sheet.
+
+If a string does not follow the format, Valenced shows the author as plain text. A contributor that does not follow the format shows up with no contacts.
+
+### Version format
+
+Valenced uses custom version strings formatted as `nums ( "-" label )?` (for example `1.2.0`, `2.0`, `1.3.0-beta1`):
+
+- Labels contain lowercase alphanumeric characters only (`[a-z0-9]+`).
+- Labels denote prereleases: `1.2.0-beta1` sorts before `1.2.0`. Comparisons are digit-run, meaning `1.2.0-beta10` would sort after `1.2.0-beta1`
+- Version ranges use comparison operators: `<`, `<=`, `=`, `>=`, `>`, or `*`. Range prefixes like `^` and `~` are not supported.
+- Range satisfaction evaluates integer components. When multiple versions satisfy a range, the newest release without a prerelease label takes priority.
+
+Valenced validates manifests during installation and rejects invalid format versions or malformed version strings.
+
+<Callout>
+    Valenced's versioning system is flexible so plugins can use versioning schemes that fit their purpose.
+    For example - [CalVer](https://calver.org/) may be better suited for user-facing plugins, while [SemVer](https://semver.org/) is better suited for [library plugins](/docs/plugin-development/getting-started/making-library-plugins).
+</Callout>
+
+### Reserved dependencies
+
+Two dependency identifiers are reserved by Valenced and resolve directly against the host environment rather than other plugins:
+
+- **`valenced.api`:** Constrains the supported Valenced API runtime version.
+- **`discord`:** Constrains the supported Discord client version.
+
+Always declare `valenced.api` in your dependencies so Valenced can gracefully prevent loading on older, unsupported host versions.
+
+### The dist block
+
+The `dist` section informs the Valenced loader which compiled artifacts to execute:
+
+```json
+{
+    "dist": {
+        "script": "index.js",
+        "android": {
+            "path": "plugin.jar",
+            "class": "com.example.plugin.MyPlugin"
+        }
+    }
+}
+```
+
+- `script`: Relative path to the bundled JavaScript file inside the ZIP.
+- `android`: Configuration for the native Android component (only include this if your plugin has native code).
+
+Both paths are relative to the root of the packaged plugin ZIP archive.
+
+## Native plugins with Kotlin
+
+If your plugin needs to execute native Android code before Discord's JavaScript environment initializes, you can write Kotlin code inside `src/main/kotlin/`.
+
+In Valenced, the native entrypoint is a top-level value created with the `plugin { }` DSL rather than a subclassed class:
+
+```kotlin title="plugins/example-plugin/src/main/kotlin/com/example/plugin/MyPlugin.kt"
+@file:JvmName("MyPlugin")
+
+package com.example.plugin
+
+import app.valenced.plugins.plugin
+
+val myPlugin = plugin {
+    start {
+        log.i("Started")
+    }
+
+    stop {
+        log.i("Stopped")
+    }
+}
+```
+
+You can use the Xposed API to hook methods similar to how the [Patcher library](/docs/plugin-development/api-reference/patcher) works.
+Discord 352.2 and later rename most of their classes and members with R8. Find those with [`dexFinder`](/docs/plugin-development/api-reference/native#finding-obfuscated-code) instead of hardcoding names.
+Additionally, you can also find examples in Valenced's internal code - for example, the built-in [Prevent OTA Updates](https://github.com/Valenced/valenced/blob/main/android/src/main/kotlin/app/valenced/xposed/tweaks/plugins/internal/PreventOTAUpdates.kt) plugin.
+
+While this documentation won't explain how Xposed, Android, or Java reflection works, feel free to read these resources:
+ - [Xposed API docs](https://api.xposed.info): Xposed API.
+ - [JADX](https://github.com/skylot/jadx): Dex to Java Decompiler.
+ - [Kotlin](https://kotlinlang.org/docs)
+ - [Java Reflection Tutorial](https://docs.oracle.com/javase/tutorial/reflect/index.html)
+
+When loading the native component, Valenced inspects the class named in `dist.android.class` and retrieves the first `PluginBuilder` value it finds.
+Valenced only loads this class when the plugin starts. A disabled plugin's code never runs, not even its top-level initializers. A missing JAR or class shows up as a load error when the plugin starts. Because the Kotlin compiler generates facade class names ending in `Kt` by default (e.g. `MyPluginKt`), adding `@file:JvmName("MyPlugin")` at the top of your file keeps your class name clean and matches your manifest configuration.
+
+During the build process, Gradle compiles your Kotlin code and converts JVM bytecode into Android DEX format using `d8`, packaging it into the `plugin.jar` referenced by your manifest.
+
+<Callout title="Valenced APIs are compile-only">
+    The Valenced API, the Xposed API, coroutines, and the Kotlin standard library are compile-only dependencies. Discord and the Valenced loader provide them at runtime, so your JAR must not contain them. The Valenced API also brings DexKit's query classes for `dexFinder`.
+</Callout>
+
+## Building plugins
+
+Gradle orchestrates the entire build pipeline for both native Kotlin and JavaScript code:
+
+```bash
+# Build and package all plugins in the repository
+./gradlew packageAllPlugins
+
+# Build and package a specific plugin
+./gradlew packageExamplePlugin
+```
+
+Each packaging task generates a ready-to-distribute `.zip` file inside `build/dist/`. The archive contains your `manifest.json` and compiled artifacts laid out so that the Valenced client can unpack and execute them directly.
+
+Running the JS build directly only compiles the JavaScript/TypeScript bundle:
+
+```bash
+bun run build                         # build JavaScript for all plugins
+bun run build my-plugin               # build JavaScript for one plugin
+bun run build --plugins-dir themes    # build JavaScript for all theme plugins
+```
+
+Every packaging task empties `build/dist/` first, so a rebuilt ZIP never keeps a stale digest. Packaging one plugin therefore removes the other plugins' ZIPs too.
+
+Building the JavaScript bundle alone does not produce an installable artifact. Gradle packaging (`./gradlew package...`) is still required to package the manifest and compiled assets into a `.zip` archive that can be sideloaded or served from a repository.
+
+### Specifying your JavaScript runtime
+
+When running packaging tasks, Gradle automatically detects available JavaScript runtimes in order of preference: Bun and Node.js. If you want to force a specific runtime or specify a custom binary path, pass the `-PjsTool` or `-PjsToolPath` properties:
+
+```bash
+./gradlew packageAllPlugins -PjsTool=node
+./gradlew packageAllPlugins -PjsToolPath=/opt/bun/bin/bun
+```
+
+<Callout type="info" title="Package manager compatibility">
+    You can install project dependencies using either [Bun](https://bun.com/) or [npm](https://www.npmjs.com/) (`bun install` or `npm install`).
+</Callout>
+
+## Next steps
+
+- [Your First Plugin](/docs/plugin-development/getting-started/your-first-plugin): Step-by-step tutorial writing your first plugin.
+- [Testing Your Plugin](/docs/plugin-development/getting-started/testing-your-plugin): Test plugins locally on an Android device or emulator.
+- [Making Library Plugins](/docs/plugin-development/getting-started/making-library-plugins): Share common utilities and scoped APIs between plugins.
+- [Publishing Your Plugin](/docs/plugin-development/getting-started/publishing-your-plugin): Set up automated releases and publish your own repository.

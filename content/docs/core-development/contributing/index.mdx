@@ -1,0 +1,80 @@
+---
+title: Contributing
+description: Set up, build, and contribute to Valenced core repositories.
+icon: GitPullRequest
+---
+
+Guidelines for contributing to Valenced repositories, covering setup, builds, and code conventions.
+
+## Repositories
+
+| Repository | Language and stack | Purpose |
+| --- | --- | --- |
+| [valenced](https://github.com/Valenced/valenced) | TypeScript, Deno, Kotlin Multiplatform, Gradle | Monorepo: the JS bundle (`bundle/`), shared Kotlin code (`core/`), and the Android (`android/`) and iOS (`ios/`) loaders. |
+| [valenced-community-plugins](https://github.com/Valenced/valenced-community-plugins) | TypeScript, Kotlin | Official plugin repository, including the Themes plugins. |
+| [valenced-manager](https://github.com/Valenced/valenced-manager) | Kotlin | Non-root installer: bundles the loader with Discord. |
+| [revenge-devtools](https://github.com/revenge-mod/revenge-devtools) | TypeScript, Bun | REPL server and MCP endpoint. |
+
+## Building
+
+```sh
+git clone https://github.com/Valenced/valenced
+cd valenced
+```
+
+You need JDK 25 or later, the Android SDK, and [Deno](https://deno.com/) at the version in `bundle/.dvmrc`.
+
+### The loaders
+
+Gradle builds the bundle into the loaders, so one command gives you an installable APK:
+
+```sh
+./gradlew :android:assembleDebug        # APK output at android/build/outputs/apk/
+./gradlew :android:testDebugUnitTest :core:testAndroidHostTest   # unit tests
+./gradlew :core:publishToMavenLocal :android:api:publishToMavenLocal   # publish the native API to local Maven
+```
+
+Install the APK on a rooted test device with an Xposed manager (Vector or LSPosed), scope Discord, and inspect output via `adb logcat` (tag `ValencedAndroid`). See [Build](/docs/core-development/architecture/build#the-loaders) for every task.
+
+### The bundle
+
+```sh
+cd bundle
+deno install
+
+deno run build        # production build to dist/valenced.bundle
+deno run build --dev  # debug build with verbose logging
+deno run dev          # dev server on port 4040 (add --lan for other devices)
+deno run types        # emit API type definitions
+deno run test         # run tests
+deno x tsc --noEmit -p .              # typecheck
+deno x biome check --write <paths>    # format and lint
+```
+
+The build also emits `dist/manifest.json`, the bundle manifest the native loader reads to learn about bundled plugins before JavaScript runs.
+
+To iterate without rebuilding the APK, point a **debug** loader at the dev server (see [Updating Valenced](/docs/updating-valenced#loading-pre-release-builds)), and use [DevTools](/docs/devtools). Release loaders only run the bundle they shipped with.
+
+### revenge-devtools
+
+```sh
+git clone https://github.com/revenge-mod/revenge-devtools
+cd revenge-devtools
+bun install
+```
+
+## Contribution workflow
+
+1. Open an issue or discuss substantial changes in the [Discord server](https://discord.com/invite/dtBTQHYSx4) before writing code.
+2. Fork the repository and create a feature branch (`git checkout -b feature-xyz`).
+3. Make your changes following the repository style. TypeScript projects use Biome (`deno x biome check --write` in `bundle/`).
+4. Test on a real device or emulator. Verify both `--dev` and production builds boot cleanly.
+5. Submit a pull request with a concise summary of changes and rationale.
+
+## Guidelines
+
+- **Respect boot ordering:** Files in the bootstrap pipeline (`bundle/src/index.ts`, `preinit`, `init`, `start`) rely on `@as-require` execution order. Review [Boot Sequence](/docs/core-development/architecture/boot-sequence) before editing bootstrap files.
+- **Maintain performance in hot paths:** The module runtime, finders, and patcher are hand-optimized for Hermes. Avoid refactoring hot loops or adding abstractions without benchmark data.
+- **Tear down patches cleanly:** Core patches and event listeners must provide unpatch routines.
+- **Type public exports:** APIs exported from `bundle/lib/*` form the plugin API contract. Include JSDoc comments and explicit types.
+- **Preserve plugin compatibility:** Do not break existing API signatures without prior maintainer discussion.

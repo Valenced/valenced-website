@@ -1,0 +1,94 @@
+---
+title: Features
+description: Capabilities and commands in Valenced DevTools.
+icon: ListChecks
+---
+
+## Remote code execution
+
+Input in the server terminal that does not start with a dot executes as JavaScript on all connected clients:
+
+```js
+> valenced.discord.native.ClientInfoModule.getConstants().Version
+"250.0"
+```
+
+Hermes does not persist top-level variables across executions. Use the `vars` object to store state:
+
+```js
+> x = 1 + 1
+2
+> x
+undefined
+
+> vars.x = 1 + 1
+2
+> vars.x
+2
+```
+
+Target a specific client with `.run <client> <code>` when multiple devices connect.
+
+## Variable mappings
+
+Create shortcuts for client-side values:
+
+```text
+> .map+ HI HermesInternal
+Mapped: HI -> HermesInternal
+
+> HI === HermesInternal
+true
+```
+
+Use `.map` to list active mappings, and `.map- <var>` to remove a mapping.
+
+## Exposed scope
+
+Clients can expose variables into the evaluation scope. Valenced exposes helper objects like its `logger`, and executed code can access the `devTools` client instance.
+
+## File watching
+
+Start the server with `--watch [path]` and configure a command to run on file changes:
+
+```text
+> .setting server.watch.command "valenced.discord.native.BundleUpdaterManager.reload()"
+```
+
+Rebuilding your bundle now automatically triggers an app reload.
+
+## Log streaming
+
+Clients can stream logs to the server console across log levels (Debug, Default, Warn, Error). Adjust log filtering with:
+
+```text
+> .setting client.log.level 0
+```
+
+The server maintains a circular buffer of approximately 1000 log entries, readable via the `get_logs` MCP tool.
+
+## Client aliases
+
+Clients can assign a device alias on connection, allowing commands like `.run my-device ...` instead of raw hexadecimal IDs. Set the alias in Valenced's Developer Kit settings.
+
+## MCP server
+
+When started with `--mcp` (or `--mcp-port`), the server provides a [Model Context Protocol](https://modelcontextprotocol.io) endpoint over HTTP:
+
+| Group | Tools |
+| --- | --- |
+| Modules | `get_modules`, `lookup_modules`, `require_module` |
+| Scope and patching | `eval`, `save_var`, `patch_method`, `unpatch_method`, `get_logs` |
+| React | `react_tree_get_root`, `react_tree_match`, `react_tree_traverse_structure`, `react_tree_hooks` |
+| Discord | `discord_reload`, `discord_flux_listen`, `discord_flux_patch`, `discord_flux_unpatch` |
+| Server | `devtools_clients` |
+
+Calls to `eval` require confirmation in the REPL (allow once, allow for session, or deny).
+
+<Callout type="warn">
+    MCP tools execute arbitrary code in the connected client, using the same trust model as the REPL. Only enable `--mcp` for trusted local setups.
+</Callout>
+
+## Protocol
+
+DevTools uses a framed WebSocket protocol (protocol version 5) with `Hello`/`Hi` handshakes and message types including `Log`, `Run`, `MCPRun`, and `MCPResult`. Values are serialized with [devalue](https://github.com/sveltejs/devalue) to a bounded depth. Deep objects appear as preview strings like `[Object {a, b, c, ...}]`, preserving object cycles within the depth limit.

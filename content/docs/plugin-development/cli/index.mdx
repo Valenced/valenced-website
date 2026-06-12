@@ -1,0 +1,82 @@
+---
+title: Plugin CLI
+description: Command reference for the valenced-plugin build and repository toolchain.
+icon: Terminal
+---
+
+`@valenced/plugin-cli` provides the `valenced-plugin` command line tool. It handles the essential build and distribution tasks for Valenced plugins: bundling JavaScript entrypoints, building repository `index.json` manifests, planning releases, and running a local development server to test on your phone.
+
+If you started from the [plugin template](/docs/plugin-development/getting-started/setting-up-your-environment), the CLI is already installed and wired up to convenient `package.json` scripts and Gradle tasks.
+
+## Commands
+
+| Command | Description | Reference |
+| --- | --- | --- |
+| `build` | Bundles plugin JavaScript into `build/js/index.js`. | [build](/docs/plugin-development/cli/build) |
+| `generate-index` | Generates an `index.json` repository manifest from packaged plugin ZIPs. | [generate-index](/docs/plugin-development/cli/generate-index) |
+| `plan-releases` | Compares manifest versions against the published pool to plan upcoming releases. | [plan-releases](/docs/plugin-development/cli/plan-releases) |
+| `serve` | Runs a local repository server to test plugins directly on your device. | [serve](/docs/plugin-development/cli/serve) |
+
+You can run `valenced-plugin --help` or pass `--help` to any subcommand for detailed usage and available options.
+
+## Installation
+
+The official plugin template includes the CLI out of the box. You just need to install dependencies:
+
+```sh
+bun install # or npm install
+```
+
+If you're adding it to an existing project or custom repository, install both the CLI and `@valenced/types`:
+
+```json title="package.json"
+{
+    "dependencies": {
+        "@valenced/plugin-cli": "git+https://github.com/Valenced/valenced-plugin-cli.git",
+        "@valenced/types": "git+https://github.com/Valenced/valenced-types.git"
+    }
+}
+```
+
+## Running commands
+
+The template maps each CLI command to a script in `package.json`:
+
+```json title="package.json"
+{
+    "scripts": {
+        "build": "valenced-plugin build",
+        "build:dev": "valenced-plugin build --dev",
+        "generate-index": "valenced-plugin generate-index",
+        "plan-releases": "valenced-plugin plan-releases",
+        "serve": "valenced-plugin serve"
+    }
+}
+```
+
+You can run scripts with your favorite package manager. If you want to pass flags through npm/bun/pnpm/yarn, place them after `--`:
+
+```sh
+bun run build                        # build all plugins
+bun run build example-plugin         # build only example-plugin
+bun run serve -- --port 9000         # pass custom flags through to the CLI
+```
+
+You can also run the binary directly with `bunx` or `npx`:
+
+```sh
+bunx valenced-plugin build --dev
+```
+
+## Requirements
+
+- **JavaScript runtime:** [Bun](https://bun.com/), or [Node.js](https://nodejs.org/) (22.18 or later).
+- **Type definitions:** `@valenced/types` is a peer dependency. The CLI relies on its bundled import map to resolve Valenced APIs. See [Import mapping](/docs/plugin-development/cli/build#import-mapping).
+
+## Git host neutrality
+
+The CLI is completely agnostic about where you host your code. It never queries GitHub, GitLab, or any remote API directly; it simply reads local files.
+
+Your continuous integration pipeline decides how artifacts reach your users, handing local paths and public URLs to the CLI. This makes your plugin repo completely portable. Whether you're publishing on GitHub Pages, GitLab Pages, Forgejo, or a plain static S3/R2 bucket, you only configure the CI workflow steps; the CLI commands stay identical.
+
+The usual bridge is a [pool directory](/docs/plugin-development/cli/generate-index#pool-mode) of `<id>@<version>.zip` files that you publish as static assets. If your artifacts live behind an API instead, a [release descriptor](/docs/plugin-development/cli/generate-index#descriptor-mode) pairs local ZIP files with their public download URLs.

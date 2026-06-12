@@ -1,0 +1,125 @@
+---
+title: plan-releases
+description: List the plugins that a push publishes, and reject downgrades.
+icon: Tags
+---
+
+`valenced-plugin plan-releases` decides which plugins are ready to publish. It compares the `version` in each plugin's `manifest.json` against the artifacts already in your published pool.
+
+In CI, this command produces the plan that the release workflow copies into the pool. You can also run it locally against a checkout of your published branch to see what a push would publish.
+
+```sh
+valenced-plugin plan-releases --pool <dir> [--plugins-dir <dir>]... [--dist <dir>] [--out <file>]
+```
+
+## Flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--pool <dir>` | required | Checkout of the published pool that holds the `<id>@<version>.zip` artifacts. |
+| `--plugins-dir <dir>` | `plugins` | Directory that holds your plugin folders. Repeat it to plan from several directories. The template passes `plugins` and `themes`. |
+| `--dist <dir>` | `build/dist` | Directory that holds the packaged ZIP files, used for the `zip` path in the output. |
+| `--out <file>` | `releases.json` | Where to write the plan. Missing parent folders are created. |
+| `--help`, `-h` | | Show help. |
+
+<Callout type="warn" title="The pool is required">
+    The command fails when `--pool` is missing or points at a folder that does not exist. An absent pool looks the same as an empty one, so it would plan a fresh release of every version you already published.
+</Callout>
+
+## How releases are planned
+
+A plugin is planned for release when the pool holds no `<id>@<version>.zip` for its current manifest version:
+
+```text
+plugins/example-plugin/manifest.json   version 1.1.0, id com.example.plugin
+pool holds                             com.example.plugin@1.0.0.zip
+result                                 release planned: com.example.plugin@1.1.0.zip
+```
+
+The command prints one line per plugin. A `+` marks an artifact to publish, and a `=` marks a version that the pool already holds:
+
+```text
++ com.example.plugin@1.1.0.zip
+= com.example.js-plugin@1.0.0 already published
+✓ Wrote releases.json: 1 release(s) to publish
+```
+
+## Why the pool is the ledger
+
+The pool is the only record of what you published, and the index is generated from it. That gives you two properties:
+
+- **A failed release publishes nothing.** The artifact and the index land in one commit, so an interrupted run leaves no trace. Run the workflow again and it plans the same release.
+- **Renaming a plugin folder keeps its history.** The pool is keyed by plugin id, not by folder name, so the planner still sees every version you published.
+
+Git tags are still created for each release, but only as changelog anchors. The planner never reads them.
+
+## Output format
+
+```json title="releases.json"
+[
+    {
+        "name": "example-plugin",
+        "id": "com.example.plugin",
+        "version": "1.1.0",
+        "tag": "example-plugin@1.1.0",
+        "zip": "build/dist/com.example.plugin@1.1.0.zip",
+        "file": "com.example.plugin@1.1.0.zip"
+    }
+]
+```
+
+`zip` is the built artifact to copy, and `file` is the name it takes inside the pool. The list is sorted by plugin folder name, so the output is reproducible.
+
+## Downgrade protection
+
+The command fails when a manifest version is below the newest version in the pool:
+
+```text
+example-plugin: manifest version 1.0.0 is below published 1.1.0
+```
+
+Version comparison follows the client's rules, where an unlabelled version ranks above a labelled one. Promoting `1.2.0-rc` to `1.2.0` is an upgrade and passes.
+
+The command also fails on a malformed version, on a manifest that is missing `id` or `version`, and on any file in the pool that is not named `<id>@<version>.zip`.
+
+<Callout type="warn" title="Avoid external version sorters">
+    Standard SemVer sorters rank `1.2.0-rc` above `1.2.0`, which is the reverse of Valenced's rules. They report the promotion of a release candidate as a downgrade. Use `plan-releases` instead.
+</Callout>
+
+## Automating releases in CI
+
+The command only reads local manifests and the pool folder. It contacts no Git host, so your workflow keeps full control of how artifacts are published:
+
+```yaml title=".github/workflows/release.yml"
+- name: Check out the pool
+  uses: actions/checkout@v4
+  with:
+      ref: gh-pages
+      path: published
+
+- run: bun run plan-releases -- --pool published/pool --out releases.json
+
+- run: |
+      jq -r '.[] | [.zip, .file] | @tsv' releases.json |
+        while IFS=$'\t' read -r zip file; do
+          cp "$zip" "published/pool/$file"
+        done
+```
+
+The workflow then regenerates the index from the pool and commits both in one step. See [generate-index](/docs/plugin-development/cli/generate-index) for that half.
+
+## Checking releases locally
+
+Clone your published branch once, then plan against it:
+
+```sh
+git clone --branch gh-pages --depth 1 <your repo url> published
+bun run plan-releases -- --pool published/pool
+```
+
+Package your plugins first if you want the `zip` paths to point at real files:
+
+```sh
+./gradlew packageAllPlugins
+bun run plan-releases -- --pool published/pool
+```

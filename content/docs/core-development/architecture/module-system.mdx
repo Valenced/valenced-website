@@ -1,0 +1,113 @@
+---
+title: Module System
+description: Valenced's Metro runtime, module finders, and the finder cache.
+icon: Boxes
+---
+
+Discord ships its JavaScript as thousands of anonymous Metro modules, identified by number. Valenced replaces Metro's module runtime with its own, then builds module finders on top of it. Plugin authors use the finders through `@valenced/modules`. This page covers how they work inside.
+
+## Why replace Metro's runtime
+
+Valenced reimplements Metro's `require` and `define` (`lib/modules/src/metro/runtime.ts` and `patches.ts`) instead of wrapping Discord's:
+
+- **Stable exports.** Metro's `importAll` clones a module's exports for ES module interop. A patch applied to the original object then misses code that reads the clone. Valenced's `importAll` sets `exports.default` on the original object and returns it, so one patch reaches every importer.
+- **Speed.** Module state is a set of bitflags. Factory calls pass at most four arguments directly, so Hermes can use its dedicated `Call1` to `Call4` instructions.
+- **Visibility.** The runtime knows which modules are initialized, which are not, and what each depends on. It tells subscribers the moment a module is first required or finishes initializing.
+
+## How the runtime takes over
+
+Metro sets itself up in a fixed order. Valenced patches it at the right steps:
+
+1. Metro defines `__r`, `__d`, and `__c`, then assigns `__registerSegment`. The [boot trap](/docs/core-development/architecture/boot-sequence#entry-srcindexts) fires here.
+2. Valenced replaces `__d` with its own `define`, and `__registerSegment` with its own segment handler.
+3. On the first `__d` call (module 0), Valenced also replaces `importDefault` and `importAll` on `__r`, then swaps in the real `define`.
+4. Every later module definition and segment goes through Valenced.
+
+Metro can split a bundle into **segments** that define their modules lazily. When a `require` targets a module that isn't defined yet, the runtime finds its segment and runs the segment's definer, then retries.
+
+## Module records
+
+The runtime keeps a few shared structures (`lib/modules/src/metro/patches.ts`):
+
+| Structure | Holds |
+| --- | --- |
+| `mList` | Every defined module: its factory, flags, and module object. |
+| `mDeps` | Each module's dependency map, the list of module IDs its factory receives. |
+| `mUninitialized` | IDs that are defined but haven't run, minus blacklisted ones. |
+| `mInitialized` | IDs that have run and have useful exports, minus blacklisted ones. |
+
+A module's `flags` combine `Initializing`, `Initialized`, `HasError`, `HasImportedDefault`, and `HasImportedAll`.
+
+### Blacklist
+
+After a module initializes, the runtime checks its exports. A module that exports a primitive or an empty object can never be what a finder looks for, so it goes on the **blacklist**. Blacklisted modules leave both ID sets, and finders skip them. The blacklist is part of the [cache](#caching), so the next launch skips those modules from the start.
+
+### Failed modules
+
+When a factory throws, the runtime does what Metro does: it swallows the error and gives the module empty exports. It also sets `HasError` and records `[id, error]` in `mErrorChain`. Dev builds show the error in a dialog.
+
+A failed module stays failed for the session. Every later `require` gets the same empty object, and modules that import it often throw too. One early failure can cascade across the bundle. This is why finders must never force a module to initialize too early. The recovery plugin shows `mErrorChain` when the app freezes, which points at the first module in the chain.
+
+## Subscriptions
+
+`@valenced/modules/metro/subscriptions` exposes the runtime's events:
+
+- `onModuleFirstRequired(id, cb)` runs right before a module's factory.
+- `onModuleInitialized(id, cb)` runs right after it.
+- `onAnyModuleInitialized(cb)` runs after every module.
+
+The boot stages hang off these: preinit starts when module 0 is first required, and init starts when module 0 finishes.
+
+## Finders
+
+The finders (`lib/modules/src/finders/`) search modules with **filters**:
+
+| Finder | Searches | Returns |
+| --- | --- | --- |
+| `lookupModule`, `lookupModules` | Modules that exist now | The first match, or a generator of matches. |
+| `waitForModules` | Modules initialized from now on | An unsubscribe function. |
+| `getModules` | Both, existing modules first | An unsubscribe function. |
+
+`waitForModules` never fires for a module that is already initialized. Code that runs late, or after another plugin touched the module, should look it up first with `{ initialize: false }`, and only wait when that misses.
+
+### Filters
+
+A filter is a predicate plus metadata:
+
+- **`key`** is a stable string, such as `valenced.props(open)`. The cache stores results by key.
+- **`scopes`** says which modules the filter can judge: `Initialized`, `Uninitialized`, or both.
+- **The predicate** gets `(args, id, exports, initialized)`. It runs once against the module's exports and once against `exports.default`.
+
+A filter generator, made with `createFilterGenerator`, turns arguments into filters. All built-in filters (`withProps`, `withName`, `withDependencies`, and the rest) are generators.
+
+### Two passes
+
+A lookup can judge a module in two ways:
+
+- **Exportsless pass:** For modules that haven't run. The predicate only has the ID and the dependency map, and `initialized` is `false`. `withDependencies` works here, since dependency maps exist before a module runs.
+- **Exports pass:** For modules that have run. The predicate gets the real exports, and `initialized` is `true`.
+
+A filter with the `Uninitialized` scope claims it can decide in the exportsless pass. On a match there, the lookup initializes the module to confirm it against the exports, unless the caller passed `initialize: false`.
+
+Combining filters with `.and()` or `allOf()` uses this. An exportsless filter in the combination acts as a **prefilter**. It narrows uninitialized candidates by dependency shape, and only those get initialized for the exports check. This keeps lookups from running unrelated module factories.
+
+### Defensive predicates
+
+The runtime passes exports exactly as the module set them. A predicate can receive `undefined`, `null`, a number, a string, a function, or a catch-all proxy. When a predicate throws, the finder logs the filter key and module ID, then treats the module as no match. One bad filter never takes down a lookup.
+
+## Caching
+
+Finding a module by scanning thousands of candidates is slow. The finder cache makes repeat lookups nearly free:
+
+- **Finds** map each filter key to the module IDs it matched. A flag per ID says whether the namespace or the default export matched. A key with no matches is cached as "not found".
+- **The blacklist** lists modules with useless exports.
+
+The cache lives natively, keyed by Discord's version and OTA commit (see [Native Loader](/docs/core-development/architecture/native-loader#caches)). JavaScript reads it once at startup with `valenced.caches.modules.read`. It writes it back with `valenced.caches.modules.write`, debounced by one second.
+
+A cached find is trusted. The lookup returns the cached modules without running the filter again, and a cached "not found" returns nothing right away. This is why a filter's key must change whenever its matching behavior changes. A key that two different filters share returns one filter's results for the other.
+
+Since the cache file is per Discord version, a Discord update always starts from an empty cache.
+
+The cache has a format version (`ExpectedCacheVersion` in `lib/modules/src/caches.ts`). A cache with another version is dropped, which costs one slow launch. Bump it only when the key format changes in a way that makes old keys collide.
+
+The asset cache (`valenced.caches.assets.*`) works the same way for Discord's asset registry. It maps each asset name to the module ID of every type it comes in, such as `png` or `svg`.

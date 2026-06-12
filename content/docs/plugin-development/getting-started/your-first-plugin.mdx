@@ -1,0 +1,159 @@
+---
+title: Your First Plugin
+description: Write a complete Valenced plugin, step by step.
+icon: Sparkle
+---
+
+## Example plugin walkthrough
+
+Here is a complete plugin that blocks typing indicators and adds a settings switch:
+
+```json title="silent-typing/manifest.json"
+{
+    "format": 1,
+    "id": "dev.you.silent-typing",
+    "name": "Silent Typing",
+    "author": "Your Name",
+    "description": "Blocks typing indicators.",
+    "icon": "EyeSlashIcon",
+    "version": "0.1.0",
+    "dependencies": {
+        "valenced.api": { "version": ">=1" },
+        "discord": { "version": "*" }
+    },
+    "dist": {
+        "script": "index.js"
+    }
+}
+```
+
+```tsx title="silent-typing/index.tsx"
+import { onFluxEventDispatched } from '@valenced/discord/flux'
+import { Design } from '@valenced/discord/design'
+
+interface Settings {
+    enabled: boolean
+}
+
+export default plugin<{ jsonStorage: Settings }>({
+    // Eagerly load settings file
+    jsonStorage: {
+        load: true,
+        default: { enabled: true },
+    },
+    start({ cleanup, jsonStorage, logger }) {
+        logger.log('Silent Typing started')
+
+        cleanup(
+            // Intercept outgoing typing events
+            onFluxEventDispatched('TYPING_START_LOCAL', payload => {
+                if (jsonStorage.cache?.enabled) return
+                return payload
+            }),
+        )
+    },
+    SettingsComponent({ api }) {
+        const { TableRowGroup, TableSwitchRow } = Design
+        const settings = api.jsonStorage.use()
+
+        return (
+            <TableRowGroup>
+                <TableSwitchRow
+                    label="Hide typing indicator"
+                    value={settings?.enabled ?? true}
+                    onValueChange={(enabled: boolean) =>
+                        api.jsonStorage.set({ enabled })
+                    }
+                />
+            </TableRowGroup>
+        )
+    },
+})
+```
+
+Key parts of the plugin:
+
+1. **`plugin({ ... })`:** The ambient entrypoint wrapper function typed by `@valenced/types`. Generic parameters (such as `<{ jsonStorage: Settings }>`) automatically type lifecycle callbacks and components.
+2. **Manifest:** Defines plugin metadata. `id` must be globally unique, `format` must be `1`, `valenced.api` specifies the supported Valenced API version, and `dist.script` points to the bundled JS entry. See [here](/docs/plugin-development/getting-started/the-plugin-template#the-manifest-file) for the manifest format.
+3. **`start(api)`:** Executes when the plugin starts. Receives the scoped [Plugin API](/docs/plugin-development/api-reference/plugin-api).
+4. **`cleanup(...fns)`:** Registers teardown callbacks invoked on stop. API methods like `onFluxEventDispatched` return unregister functions that pass directly into `cleanup`.
+5. **`jsonStorage`:** Provides persistent JSON configuration backed by disk storage, with a `use()` React hook for reactive UI updates.
+6. **`SettingsComponent`:** Renders settings using Discord's built-in design system components.
+
+### Lifecycles
+
+```mermaid
+flowchart LR
+    R[Register] --> P[preInit]
+    P --> I[init]
+    I --> S[start]
+    S --> X[stop]
+```
+
+| Lifecycle | Trigger | Typical usage |
+| --- | --- | --- |
+| `preInit` | Before index module (0) factory runs | Runs as soon as possible with very limited APIs. Early startup patches and telemetry blockers. React is unavailable. |
+| `init` | After index module (0) initializes | Runs as soon as all important modules are initialized. Early patches requiring React or core modules before UI renders. |
+| `start` | During `AppRegistry.runApplication` call | Full runtime API available. Standard plugin initialization and event subscriptions. |
+| `stop` | When plugin stops | Teardown logic (registered cleanups execute automatically). |
+
+Most plugins only implement `start`. See [Lifecycles](/docs/plugin-development/api-reference/lifecycles) for details.
+
+### Native Android plugins (Kotlin)
+
+Plugins can include a compiled native component (`dist.android`) authored using the `plugin { }` DSL:
+
+```kotlin title="MyPlugin.kt"
+@file:JvmName("MyPlugin")
+
+package com.example.plugin
+
+import app.valenced.plugins.plugin
+import app.valenced.xposed.api.registerNativeMethod
+
+val myPlugin = plugin {
+    start {
+        log.i("Loaded ${manifest.id}")
+        registerNativeMethod("${manifest.id}.ping") { "pong" }
+    }
+    stop {
+        log.i("Unloaded ${manifest.id}")
+    }
+}
+```
+
+The host scans the class named in `dist.android.class` and extracts the first `PluginBuilder` value. Use `@file:JvmName("MyPlugin")` to make the facade class name match the manifest.
+
+### Dependencies
+
+Plugins declare dependencies by plugin ID with optional version constraints:
+
+```ts
+manifest: {
+    id: 'dev.you.extension',
+    dependencies: {
+        'valenced.api': { version: '>=1' },
+        'discord': { version: '>=355.0' },
+        'dev.you.base-plugin': { version: '>=2.0 <3' },
+        'dev.you.optional-helper': { optional: true },
+    },
+}
+```
+
+- **`valenced.api`:** Reserved and mandatory for external plugins to declare compatible runtime versions.
+- **`discord`:** Reserved for pinning minimum or supported Discord client versions.
+- Dependencies resolve by ID against enabled repositories.
+- Optional dependencies do not block plugin startup if unsatisfied.
+- Disabling a plugin stops and disables plugins that require it. Users choose whether plugins that optionally depend on it keep running.
+
+Dependency plugins start before their dependents and can expose custom methods to dependents via `decorate()`.
+
+## Best practices
+
+- **Always register cleanups:** Pass unpatch and unsubscribe callbacks to `cleanup()`. If a change cannot be undone at runtime, call `plugin.requireReload()`.
+- **Avoid runtime filesystem reads:** Do not read installation directories at runtime. Installed files may be replaced during background updates. Use `jsonStorage` for runtime data.
+- **Defer non-essential work:** Avoid eager lookups during startup. Use `getModules` or `waitForModules` to initialize features when relevant modules load.
+- **Register settings when settings load:** Use `onSettingsModulesLoaded()` instead of requiring settings dependencies during startup.
+- **Type API lookups:** Provide generic type parameters to finder filters (`withProps<typeof import('react')>('createElement')`) for type-safe results.
+
+Next: [Testing Your Plugin](/docs/plugin-development/getting-started/testing-your-plugin).

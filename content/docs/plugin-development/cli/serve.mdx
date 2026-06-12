@@ -1,0 +1,84 @@
+---
+title: serve
+description: Serve a plugin repository from your machine to test on a device.
+icon: Server
+---
+
+`valenced-plugin serve` spins up a lightweight local HTTP server hosting your built plugin ZIP files alongside an automatically generated `index.json`. 
+
+By adding the server's local URL as a repository in the Valenced app, you can test the entire plugin lifecycle (browsing, installing, and updating) directly on your Android device.
+
+```sh
+valenced-plugin serve [--dist <dir>] [--port <port>] [--host <ip>] [--base-url <url>]
+```
+
+## Flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dist <dir>` | `build/dist` | Directory containing your packaged plugin ZIP files. |
+| `--port <port>` | `8080` | Port for the local server to listen on. |
+| `--host <ip>` | auto-detected LAN IP | IP address or hostname to advertise in artifact download URLs. |
+| `--base-url <url>` | `http://<host>:<port>` | Custom base URL to advertise in the index. Overrides `--host` and `--port` for generated URLs. |
+| `--help`, `-h` | | Displays help information. |
+
+The server binds to `0.0.0.0` (all network interfaces). The `--host` and `--base-url` options only control the URLs embedded inside the generated `index.json`, allowing phones on your local Wi-Fi network to reach your development machine.
+
+## Getting started
+
+Make sure you've built and packaged your plugins before starting the server:
+
+```sh
+./gradlew packageAllPlugins
+bun run serve
+```
+
+Once running, the CLI logs the repository URL:
+
+```text
+✓ Index rebuilt: 13 plugin(s), 13 artifact(s)
+Serving local plugin repository on port 8080
+  Repository URL: http://192.168.1.2:8080
+```
+
+To add this repository on your device:
+1. Open Discord on your device.
+2. Navigate to **Settings > Valenced > Plugins**.
+3. Tap the repository icon in the upper corner, add the printed Repository URL, and tap **Save**.
+
+## Testing over USB with ADB reverse
+
+If your phone is on a separate network, can't reach your computer's LAN IP, or blocks cleartext HTTP on local subnets, you can route requests through USB using ADB port forwarding:
+
+```sh
+bun run serve -- --base-url http://127.0.0.1:8080
+adb reverse tcp:8080 tcp:8080
+```
+
+When `--base-url` uses `localhost` or `127.0.0.1`, the CLI automatically prints the exact `adb reverse` command you need to copy and paste.
+
+## Available endpoints
+
+| Path | Response |
+| --- | --- |
+| `/index.json` | The dynamically generated repository index manifest. |
+| `/<id>@<version>.zip` | The requested plugin ZIP artifact from the distribution directory. |
+| *other paths* | Returns a `404 Not Found`. |
+
+All responses include `Cache-Control: no-store` headers to ensure neither your device nor intermediate proxies cache stale manifests or older plugin builds.
+
+## Instant live reloads
+
+Whenever your device requests `/index.json`, the server quickly re-checks your dist folder. By comparing the filename, size, and modification timestamp of each ZIP, it detects changes and regenerates the index on the fly.
+
+This makes testing plugin updates seamless:
+
+1. Bump the `version` field in your plugin's `manifest.json`.
+2. Repackage the plugin (`./gradlew packageAllPlugins` or package that specific plugin).
+3. Check for updates on your device. The updated version is detected immediately without restarting the development server.
+
+Because artifacts are named `<id>@<version>.zip`, repackaging leaves the previous build in place, so the index offers both versions and you can exercise the real update path.
+
+<Callout title="Early validation during development">
+    `serve` shares the exact same validation logic as [generate-index](/docs/plugin-development/cli/generate-index), including manifest validation and `repo.config.json` rules. If a manifest is invalid or missing required fields, requests return an HTTP 500 error with the exact validation message, helping you catch syntax errors before publishing.
+</Callout>

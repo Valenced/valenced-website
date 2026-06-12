@@ -1,0 +1,113 @@
+---
+title: Plugin States
+description: State slots, how flags persist, and how both realms keep them in sync.
+icon: Layers
+---
+
+Plugin states answer one question per plugin: should it run? Native stores them, because it has to decide what to load before any JavaScript runs. JavaScript shows and edits them.
+
+## Slots
+
+States live in **slots**. A slot is a named set of plugin flags, one entry per plugin.
+
+```text
+files/valenced/plugins/
+  states/active         # ID of the slot the user edits (default: primary)
+  states/next           # one-shot slot override, consumed at boot
+  states/slots/<id>     # a slot's plugin flags, binary
+  storage/<slot>/<id>/  # plugin data, per slot
+  dist/<id>/            # installed plugin files, shared by every slot
+  repos/                # repositories and sources, shared by every slot
+```
+
+Two slot IDs matter at any time, and every operation names one of them:
+
+| ID | Comes from | Used by |
+| --- | --- | --- |
+| **Active slot** | `states/active`, default `primary` | The UI, `setEnabled`, the disable cascade, uninstall, and plugin data. |
+| **Boot slot** | `states/next` if present (consumed), else the active slot | `loadPlugin`, the running plugins' flags, and their persistence. |
+
+On a normal boot, both IDs are the same string, so nothing branches. They differ only for a one-shot boot.
+
+### Slot rules
+
+- **IDs** use `[a-zA-Z0-9._-]`, with no leading dot and no `..`.
+- **Internal slots** start with `:`. `setActiveSlot` refuses to make an internal slot active for good, so it can only be a one-shot. A crash loop can never trap the user in one.
+- **Ephemeral slots** never reach disk. Writes to them change the session only.
+- **Plugin data** keys on the active slot, not the boot slot. A one-shot boot changes which plugins run, never their data.
+
+### Recovery Mode
+
+Recovery Mode is a one-shot boot into `:defaults`, an ephemeral slot that starts empty:
+
+1. Every plugin falls back to its own defaults, so only essential and enabled-by-default plugins load. External plugins stay off.
+2. The UI still edits the active slot, so the user repairs their real setup while something else runs.
+3. Nothing written during the session reaches the saved setup, since the boot slot is ephemeral.
+4. The next boot returns to the active slot.
+
+See [Recovery](/docs/core-development/architecture/recovery) for how users get there.
+
+## Flags
+
+Each slot entry holds a set of flags. Only flags with a bit persist:
+
+| Native flag | JavaScript flag | Persisted |
+| --- | --- | --- |
+| `ENABLED` | `Enabled` | Yes |
+| `REQUIRED_BY_USER` | `RequiredByUser` | Yes |
+| `PENDING_RELOAD` | `PendingReload` | No |
+| `STARTED_LATE` | `StartedLate` | No |
+
+`PendingUpdate` and `Failed` exist only in JavaScript, for the session.
+
+Native gives each running plugin a `StateFlow` straight from its boot slot entry. A write from either realm reaches the plugin with no mirroring.
+
+### Defaults stay out of slots
+
+A slot holds what someone chose. A default is what a plugin says about itself (`essential`, `enabledByDefault`). Valenced never writes a default into a slot, because "nobody has chosen" is exactly what a default depends on.
+
+- Native ORs the defaults into a plugin's live flags in `loadPlugin`, before it attaches the save-on-change watcher. The default reaches the session but never the disk.
+- JavaScript keeps `undefined` for "no entry" next to each plugin's default flags. Every read goes through `resolveFlags`, which falls back to the default. A flag set of `0` is an answer ("off"), not a missing one.
+
+Bundled plugins declare their defaults once, in `manifest.json`. The build copies them into the bundle manifest, so both realms read the same declaration.
+
+## Keeping both realms in sync
+
+Flags follow a Flux pattern, with native as the store:
+
+1. JavaScript sends an **intent**, such as `setEnabled` or `restart`.
+2. Native validates it, changes the slot, and saves it.
+3. Native **broadcasts** the result with `valenced.plugins.states.update(slot, id, state)`.
+4. JavaScript applies the broadcast without sending it back.
+
+`PluginStateSlot.write` drops a write that changes nothing. Several paths can touch one entry for one user action, and this check collapses them into one event. Change detection compares against the recorded entry, not the live flow. A running plugin mutates its own flow (for example with `requireReload()`), so the flow can run ahead of what is recorded.
+
+JavaScript changes flags through three verbs, all of which funnel into one store update:
+
+| Verb | Meaning | Tells native? |
+| --- | --- | --- |
+| `addPluginFlags` | JavaScript decided this. | Yes, unless only JavaScript-only flags changed. |
+| `adoptPluginFlags` | Native sets this as part of a call JavaScript is making. | No. The call itself carries it. |
+| `applyBootFlags`, `adoptSlotFlags` | Native said so. | No. Sending it back would be an echo. |
+
+`meta.flags` is read-only. JavaScript only ever adds flags. Clearing a flag is native's answer to a stop or a disable.
+
+A broadcast that disables a running plugin does not stop it on the JavaScript side. Native asks for the stop separately through `valenced.plugins.stopping`. Mixing the two once made a plugin lose its `PendingReload` flag.
+
+## Bridge methods
+
+| Method | Shape | Purpose |
+| --- | --- | --- |
+| `valenced.plugins.states.read` | `{ [slot]: { [id]: state } }` | Every loaded slot, for boot hydration. A one-shot boot includes both slots. |
+| `valenced.plugins.states.getSlots` | `{ active, oneShot?, slots }` | Which slots exist and which ones this boot uses. |
+| `valenced.plugins.states.setActiveSlot` | `(slot, oneShot?)` | Picks the slot for the next boot. Never changes the running session. |
+| `valenced.plugins.states.update` | `(slot, id, state)` | A flag change, in either direction. |
+| `valenced.plugins.getConstants` | `{ storageRootPath, distRootPath, defaultsOnlySlot }` | Paths for plugin data and files, and the Recovery Mode slot ID. |
+
+A state crosses the bridge as an object (`{ enabled, requiredByUser, pendingReload, startedLate }`), not a bitmask. Bitmasks are for disk only, so either realm can renumber bits freely.
+
+JavaScript detects Recovery Mode as `oneShot === defaultsOnlySlot`. The active slot can never hold an internal ID, so it can't be used for this check.
+
+## Uninstall is cross-slot
+
+A plugin's files in `dist/` are shared by every slot. Uninstall therefore removes the plugin from every slot's entries and deletes its data in every slot's storage. Leaving any of it behind would bring back old states when the plugin is installed again.

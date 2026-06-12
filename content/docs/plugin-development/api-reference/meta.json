@@ -1,0 +1,20 @@
+{
+  "title": "API Reference",
+  "icon": "Book",
+  "pages": [
+    "lifecycles",
+    "plugin-api",
+    "patcher",
+    "modules",
+    "storage",
+    "discord",
+    "assets",
+    "themes",
+    "react",
+    "components",
+    "externals",
+    "utils",
+    "native",
+    "hidden"
+  ]
+}

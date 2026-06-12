@@ -1,0 +1,192 @@
+---
+title: Plugin System
+description: Plugin kinds, discovery, lazy loading, dependencies, lifecycles, and how both realms stop plugins together.
+icon: Plug
+---
+
+A plugin is one concept across two realms. It has one ID, one manifest, and one set of states, with an optional native half and an optional JavaScript half. Native owns discovery, files, states, and dependency verdicts. JavaScript owns the JavaScript lifecycles, the UI, and the stop cascade.
+
+## Kinds of plugins
+
+| Kind | Declared in | Halves | Notes |
+| --- | --- | --- | --- |
+| Native internal | `internalPlugins` in `InternalPluginRegistry.kt` | Native, optionally JavaScript | Recovery, No Track, Prevent OTA Updates, Themes API. |
+| Providers | `ProviderPlugins.kt` | Native | `valenced.api` and `discord`. They serve the reserved dependency versions. |
+| Bundled | `src/plugins/<stage>/<name>/manifest.json` | JavaScript | Settings, plugin settings, staff settings, API plugins. |
+| External | `plugins/dist/<id>/manifest.json` on the device | Either or both | Installed from a repository or a ZIP. |
+| Stub | `stubPlugin(...)` or a bundle manifest entry with `defaultSource` | Like internal | An internal plugin that a repository copy can replace. See [Repositories](/docs/core-development/architecture/repositories#stub-plugins). |
+
+A native internal plugin and a bundled plugin can share an ID, such as `valenced.no-track`. They then form one plugin with both halves.
+
+Every internal plugin gets `valenced.api` and `discord` added to its dependencies automatically, so validation and resolution need no special cases for internals. External manifests must declare both.
+
+## Native side
+
+### Registry
+
+`PluginRegistry` (`tweaks/plugins/PluginRegistry.kt`) holds the session's plugin facts:
+
+- `factories`: one `PluginFactory` per known plugin.
+- `discoveryFailures`: plugins skipped this session, with their reasons.
+- `loaded`: running native halves.
+- `pendingUpdates`: updates on disk that load at the next boot.
+- `bootErrors`: load errors per plugin.
+
+`add` and `forget` are the only ways to change the set of plugins, and both invalidate the dependency graphs derived from it.
+
+A **`PluginFactory`** is a manifest, internal flags (`INTERNAL`, `ESSENTIAL`, `ENABLED_BY_DEFAULT`), an optional script path and default source, and a lazy `build(chain)`. Building is the only point where plugin code runs.
+
+### Boot
+
+The `pluginLoader` tweak runs once per process:
+
+1. Load plugin states.
+2. Collect internal plugins, plus bundled plugins from the [bundle manifest](/docs/core-development/architecture/native-loader#bundle-manifest) that no native internal already covers.
+3. Record default sources for stubs that have no source yet.
+4. Find **shadowed** internals: internal IDs with a recorded source and an installed copy in `dist/`. Those load as external plugins instead.
+5. Discover external plugins in `dist/`.
+6. Add every factory to the registry.
+7. Load each plugin that is enabled in the boot slot, essential, or enabled by default with no slot entry.
+
+### Discovery
+
+`external/Discovery.kt` runs in three phases, and none of them loads a class:
+
+1. **Parse** every `dist/<id>/manifest.json`. A plugin whose ID matches a non-shadowed internal is skipped, so internals always win.
+2. **Order** with the dependency graph. Plugins with missing or out-of-range required dependencies drop, cascading to their dependents. The rest sort so dependencies come first. Cycles are detected and skipped.
+3. **Describe** artifacts: find the JavaScript bundle and record how to load the native half.
+
+Skipped plugins become discovery failures with a code, such as `DEPENDENCY_MISSING` or `DEPENDENCY_UNSATISFIED`. A plugin's own fault (`MANIFEST_INVALID`) clears its enabled flag. A dependency fault keeps it enabled, so the plugin comes back on its own once the dependency is fixed.
+
+### Lazy loading
+
+`loadPlugin` is the only caller of `PluginFactory.build`. Reading a plugin's `PluginBuilder` value runs its static initializers, so a disabled plugin's code never runs, not even its top-level code.
+
+A missing JAR or a class without a `PluginBuilder` is a `LOAD_FAILED` error at load time, not a discovery failure. A switched-off plugin can't fail.
+
+### Class loader chains
+
+Each native half gets a `DexClassLoader` for its JAR. Its parent is the module's class loader, not Discord's. It is wrapped in a `CompositeClassLoader` that also searches:
+
+1. The class loaders of the plugin's **running** dependencies, so a plugin can call a library's classes.
+2. A `PackageClassLoader` serving `de.robv.android.xposed.*`, so plugins can use the Xposed API.
+
+The set of running dependencies a plugin loaded against is its **chain**. That has a few consequences:
+
+- Stopping a plugin stops everything chained to it, since their classes hold live references into its classes.
+- `restart` calls `loadPlugin` again, which recomputes the chain. A dependency installed or enabled mid-session reaches an existing plugin this way.
+- The factory only rebuilds when the chain's class loaders change. A class loader can't be re-parented, and a needless rebuild would create duplicate `Class` objects.
+- A restart that would relink stops the plugin's running chained dependents first.
+
+## Dependencies
+
+Three questions about a dependency get three different answers, owned by different parts:
+
+| Word | Question | Owner |
+| --- | --- | --- |
+| **Satisfied** | Could A link B right now? | The dependency graph, rebuilt from manifests on every change. |
+| **Chained** | What went into A's class loader? | `PluginFactory`, per build. |
+| **Linked** | Did this run of A use B? | JavaScript's `meta.linkedDependencies`, per start. |
+
+Native parses version ranges, so it answers version questions. JavaScript sees every registered plugin, including JavaScript-only ones that native may not know, so it answers presence questions.
+
+Native reports satisfaction as its complement: `unsatisfiedOptionalDependencies` lists optional dependencies that are installed but out of range. "Silence means no objection" is the safe default for IDs native doesn't know. Native re-sends the whole map with `valenced.plugins.events.dependenciesUpdated` after every install and uninstall, since one install can change the answer for many plugins.
+
+## JavaScript side
+
+### Registration
+
+Plugins register into `pList` (`lib/plugins/src/_internal/registry.ts`):
+
+- **Bundled manifests** register at preinit with `registerInternalManifest`. The implementation attaches later with `registerInternalPlugin`, when its stage imports it.
+- **External plugins** register from `valenced.plugins.list` at preinit. Each one gets an options factory that evaluates its script on first use:
+
+  ```ts
+  new Function('valenced', `return ${script}\n//# sourceURL=Valenced:Plugin:${id}`)(unscopedApi)
+  ```
+
+  A disabled plugin's script is never evaluated.
+- **Native-only plugins** in the list register too, so the UI can show them.
+
+Native can report an ID that JavaScript already holds, such as a bundled plugin. JavaScript then keeps its own record, and only applies what native alone knows: `source`, unsatisfied optional dependencies, failures, and errors.
+
+### Store
+
+A vanilla zustand store (`_internal/store.ts`) holds every plugin's flags and lifecycle status. It is the only source of truth. `plugin.status` and `meta.flags` read from it, and React hooks in `@valenced/plugins/react` subscribe to it. Start-stage UI is the only code allowed to import the React hooks, since React isn't bound before then.
+
+| Flag | Persisted | Meaning |
+| --- | --- | --- |
+| `Enabled` | Yes | The plugin should run. |
+| `RequiredByUser` | Yes | The user enabled it directly, not as someone's dependency. |
+| `PendingReload` | No | The plugin changed something it can't undo until a reload. |
+| `StartedLate` | No | It started after boot. |
+| `PendingUpdate` | No, JavaScript only | A newer version is on disk. |
+| `Failed` | No, JavaScript only | Native skipped it this session. |
+
+Status bits track lifecycle progress: `PreIniting`, `PreInited`, `Initing`, `Inited`, `Starting`, `Started`, and `Stopping`. A plugin with any status bit set counts as running.
+
+See [Plugin States](/docs/core-development/architecture/plugin-states) for how flags move between realms.
+
+### API decoration
+
+Each plugin gets its own `api` object. Plugins extend each other's `api` with decorators:
+
+- A plugin calls `decorate(fn)` to register a decorator.
+- Before a dependent's lifecycle runs, Valenced calls every decorator from the dependent's dependencies, and records each one as **linked**.
+- A decorator may return a cleanup, which runs when the dependent stops.
+- Plugins with `InternalPluginFlags.API` decorate **every** plugin. Only internal plugins can be API plugins. `valenced.api` uses this to add `jsonStorage` and `logger`.
+
+### Lifecycles
+
+Boot runs lifecycles stage by stage. See [Boot Sequence](/docs/core-development/architecture/boot-sequence#running-plugin-lifecycles).
+
+A plugin started after boot goes through `runPluginLate`:
+
+1. Compute the plugin and any stopped dependencies it needs, depth-first, so every dependency comes before its dependents.
+2. For each, mark it `StartedLate` and call `valenced.plugins.restart`, which starts the native half.
+3. Run `preInit`, `init`, and `start` in a row.
+
+The chain starts one plugin at a time. A dependent waits until its dependency has started, since native refuses to load a plugin whose dependency isn't running yet (`DEPENDENCY_MISSING`).
+
+A lifecycle that throws is a critical error. Valenced records it, logs it, then disables and stops the plugin unless it is essential. `plugin.reportError()` only records the error.
+
+## Enabling and disabling
+
+Enabling goes through native first:
+
+1. JavaScript calls `valenced.plugins.setEnabled(id, true)`.
+2. Native checks that every required dependency is installed, in range, and enabled. Otherwise, it refuses with `DEPENDENCIES_UNSATISFIED` and a list of problems, and changes nothing. JavaScript uses the list to offer enabling or installing the missing plugins.
+3. Native writes the flags to the active slot. JavaScript then starts the plugin with `runPluginLate`.
+
+Dependencies never block disabling, though essential plugins can't be disabled at all. Native clears the enabled flag on the plugin and every **required** dependent, over every known manifest rather than only running plugins. Dependents that never ran this session still lose their flag.
+
+## Stopping
+
+Either realm can start a stop, and JavaScript always tears its half down first. A JavaScript cleanup can call into native, so the reverse order would run it against a dead native half.
+
+| Started by | Flow |
+| --- | --- |
+| JavaScript | JavaScript half stops and cascades, then `valenced.plugins.stop` stops each native half. |
+| Native | `valenced.plugins.stopping` asks JavaScript to stop its half and cascade. Then native stops the native half. |
+| Native, at boot | The bridge isn't up yet, so native cascades to required dependents alone. |
+
+`stopping` is a **turn, not a veto**. If JavaScript throws or takes longer than 5 seconds, native logs it and stops the native half anyway.
+
+On the JavaScript side, `stopPlugin`:
+
+1. Waits up to 5 seconds for running lifecycles to settle. On timeout, it marks the plugin `PendingReload`.
+2. Stops linked dependents: required dependents and optional dependents that linked it.
+3. Runs `stop`, also with a 5-second timeout.
+4. Runs registered cleanups in reverse order, and clears the plugin's `api`.
+
+Stopping never changes saved states. Stop and disable are separate verbs, and disable calls stop.
+
+## Installs, updates, and uninstalls
+
+- **Fresh installs** register disabled and never start on their own. Enabling is the user's move.
+- **Updates** land on disk only. Native records a pending update and sends `pluginUpdated`, and JavaScript marks the running plugin `PendingUpdate`. Nothing running changes until a reload.
+- **Uninstall** disables first, then removes the files, the data in every slot, and the plugin's entries in every slot.
+
+The old code keeps running after an update because the loaded JAR and evaluated script stay in memory. Plugins must load what they need while starting, and never read their install directory later.
+
+See [Repositories](/docs/core-development/architecture/repositories) for the install pipeline.

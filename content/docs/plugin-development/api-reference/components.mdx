@@ -1,0 +1,94 @@
+---
+title: Components
+description: Reusable UI components matching Discord design patterns.
+icon: LayoutTemplate
+---
+
+`@valenced/components` provides UI components built on Discord's design system. Available from the `init` stage onwards (accessing before `init` throws an error).
+
+```tsx
+import {
+    Checkbox, FormSwitch, Page, SearchInput, SheetHeader, TableRowAssetIcon,
+} from '@valenced/components'
+```
+
+## `Page`
+
+Standard settings page container with inset padding and background styling:
+
+```tsx
+function MyScreen() {
+    return (
+        <Page>
+            {/* View content */}
+        </Page>
+    )
+}
+```
+
+## `FormSwitch`
+
+Standalone toggle switch component for layouts outside table rows:
+
+```tsx
+<FormSwitch value={enabled} onValueChange={setEnabled} />
+```
+
+## `SearchInput`
+
+Search text field matching Discord's native search styling:
+
+```tsx
+<SearchInput onChange={(v: string) => setQuery(v)} />
+```
+
+## `Checkbox`
+
+Discord's checkbox with a `disabled` prop added. It also accepts `View` props:
+
+```tsx
+<Checkbox
+    checked={checked}
+    onToggle={setChecked}
+    disabled={!editable}
+/>
+```
+
+## `SheetHeader`
+
+A sheet title with an optional action on the other side, such as a button. Use it as an alternative to `Design.BottomSheetTitleHeader`:
+
+```tsx
+<SheetHeader
+    title="My Plugin"
+    action={<Design.IconButton icon={SettingsIcon} onPress={openSettings} />}
+/>
+```
+
+Set `aligned="right"` to put the title on the right side.
+
+## `TableRowAssetIcon`
+
+A `TableRow` icon component that resolves assets by name, by asset ID, or from a Discord icon component:
+
+```tsx
+<Design.TableRow
+    label="Settings Row"
+    icon={<TableRowAssetIcon name="WrenchIcon" />}
+/>
+
+<Design.TableRow
+    label="Refresh"
+    icon={
+        <TableRowAssetIcon
+            IconComponent={lookupGeneratedIconComponent('RefreshIcon')!}
+        />
+    }
+/>
+```
+
+See [`lookupGeneratedIconComponent`](/docs/plugin-development/api-reference/utils#discord-valencedutilsdiscord) for looking up icon components.
+
+<Callout title="Core design components">
+    Standard UI components (buttons, text inputs, bottom sheets, table rows) are exported from [`@valenced/discord/design`](/docs/plugin-development/api-reference/discord#design-system-valenceddiscorddesign).
+</Callout>

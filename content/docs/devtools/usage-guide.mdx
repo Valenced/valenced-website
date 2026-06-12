@@ -1,0 +1,143 @@
+---
+title: Usage Guide
+description: Install, connect, and work with Valenced DevTools day to day.
+icon: BookOpen
+---
+
+## 1. Install and start the server
+
+```sh
+bun install --global @revenge-mod/devtools-server
+# or: npm install --global @revenge-mod/devtools-server
+
+revenge-devtools
+```
+
+The server listens on `ws://localhost:7864` by default. Options:
+
+```sh
+revenge-devtools [options]
+
+--port, -p <port>     # port to listen on (default: 7864)
+--watch, -w [path]    # enable file watching (default: cwd)
+--mcp                 # enable MCP endpoint at /mcp on main port
+--mcp-port <port>     # MCP on separate port
+--mcp-path <path>     # MCP endpoint path (default: /mcp)
+--help, -h
+```
+
+Examples:
+
+```sh
+revenge-devtools --port 8080 --watch ./dist
+revenge-devtools --mcp                # MCP at http://localhost:7864/mcp
+```
+
+## 2. Connect from the device
+
+Forward the port over ADB when connecting an emulator or USB-connected device:
+
+```sh
+adb reverse tcp:7864 tcp:7864
+```
+
+In Discord, open **Settings > Valenced > Developer > Connect to DevTools**. The default address is `localhost:7864`. Enable **auto-connect** to reconnect on each app start.
+
+## 3. Work in the REPL
+
+### Client management
+
+```text
+> .clients            # or .ls: list connected clients
+Connected clients (1):
+  a1b2c3d4 - v5
+
+> .run a1b2c3d4 console.log('hi')   # run on one client
+> vars.x = 1                        # broadcasts to all clients
+```
+
+### Settings
+
+```text
+> .setting                        # show all settings
+> .setting client.log.level 0     # set: 0=Debug 1=Default 2=Warn 3=Error
+> .setting client.log.inspectDepth 3
+> .setting server.watch.command "console.log('Reloaded!')"
+```
+
+### Commands
+
+```text
+> .help     # or ?: list commands
+> .exit     # or .quit / .q: exit
+```
+
+`CTRL+C` cancels the current input line. Pressing twice on an empty line exits.
+
+## Common recipes
+
+### Inspect modules
+
+```js
+> vars.mod = valenced.modules.finders.lookupModule(valenced.modules.finders.filters.withProps('openLazy'))
+> vars.mod[0]   // inspect exports
+> vars.mod[1]   // inspect module ID
+```
+
+### Auto-reload on rebuild
+
+```sh
+revenge-devtools --watch ./dist
+```
+
+```text
+> .setting server.watch.command "valenced.discord.native.BundleUpdaterManager.reload()"
+```
+
+### Inspect the React tree
+
+```js
+> vars.root = __REACT_DEVTOOLS_GLOBAL_HOOK__ // or use react_tree_* MCP tools
+```
+
+### Use with an AI agent
+
+Point your MCP agent at `http://localhost:7864/mcp` to look up modules, patch methods, monitor Flux events, and read logs. Approve `eval` prompts in the REPL when requested:
+
+```text
+MCP wants to run "eval" on client a1b2c3d4:
+{ code: 'vars.mcp.x = 1' }
+Allow? [y]es once / [s]ession / [n]o >
+```
+
+## Programmatic usage
+
+Embed the server in custom scripts:
+
+```ts
+import { broadcast, sendToClient } from '@revenge-mod/devtools-server'
+import { MessageType } from '@revenge-mod/devtools-shared/constants'
+
+broadcast({
+    type: MessageType.Run,
+    data: { code: 'console.log("Hello from custom script")', mappings: {} },
+})
+
+sendToClient('a1b2c3d4', {
+    type: MessageType.Run,
+    data: { code: 'return user.name', mappings: { user: 'devTools.scope.user' } },
+})
+```
+
+Integrate the client in a React Native app:
+
+```ts
+import { DevToolsClient } from '@revenge-mod/devtools-client'
+import { LogLevel } from '@revenge-mod/devtools-shared/constants'
+
+const client = new DevToolsClient()
+client.connect('ws://localhost:7864', 'My React Native App')
+
+client.log(LogLevel.Default, ['Hello from client'])
+client.expose('config', appConfig) // exposed as `config` in REPL
+```

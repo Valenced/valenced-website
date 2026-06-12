@@ -1,0 +1,110 @@
+---
+title: Assets
+description: Look up Discord assets and register custom icons.
+icon: Image
+---
+
+`@valenced/assets` interfaces with Discord's asset registry.
+
+```ts
+import {
+    getAssetByName,
+    getAssetsByName,
+    getAssetIdByName,
+    getAssets,
+    registerAsset,
+    addAssetOverride,
+    removeAssetOverride,
+    onAssetRegistered,
+    onAnyAssetRegistered,
+    setPreferredAssetType,
+} from '@valenced/assets'
+```
+
+## Looking up assets
+
+```tsx
+import { Image } from 'react-native'
+
+// Retrieve asset by name
+const asset = getAssetByName('WrenchIcon')
+
+// Retrieve asset ID for React Native Image sources
+const id = getAssetIdByName('WrenchIcon')
+<Image source={id} />
+
+// Retrieve all variants keyed by file type ('png', 'svg')
+const variants = getAssetsByName('WrenchIcon')
+
+// Iterate all assets
+for (const asset of getAssets()) {
+    console.log(asset.name, asset.type)
+}
+```
+
+The preferred asset format defaults to `svg` on Android and `png` on iOS. Change the fallback format with `setPreferredAssetType('png')`.
+
+## Registering custom assets
+
+```ts
+const id = registerAsset({
+    name: 'MyPluginIcon',
+    type: 'png',
+    width: 24,
+    height: 24,
+    uri: 'data:image/png;base64,...',
+})
+```
+
+Duplicate `name` and `type` combinations throw an error. Prefix custom asset names to avoid collisions.
+
+## Asset overrides
+
+Override existing Discord assets with another image source:
+
+```ts
+const wrench = getAssetByName('WrenchIcon')!
+
+// Override one asset object
+addAssetOverride(wrench, { uri: 'data:image/png;base64,...' })
+removeAssetOverride(wrench)
+
+// Override by name
+addAssetOverride('WrenchIcon', { uri: 'file:///path/to/wrench.png' })
+removeAssetOverride('WrenchIcon') // returns whether an override was removed
+```
+
+An override takes any source React Native can load:
+
+```ts
+interface AssetOverride {
+    uri: string     // eg. `file://`, `https://` or `data:` URI
+    width?: number  // defaults to the original asset's width
+    height?: number // defaults to the original asset's height
+    scale?: number
+}
+```
+
+Overriding by name needs no asset module to be initialized, and it also covers assets registered later. If both exist, an override for the asset object wins over one for its name.
+
+## Asset registration events
+
+React to Discord registering assets, before anything uses them:
+
+```ts
+// Every asset
+const unsub = onAnyAssetRegistered(asset => {
+    console.log('registered', asset.name, asset.type)
+})
+
+// Assets with a given name
+const unsubWrench = onAssetRegistered('WrenchIcon', asset => {
+    addAssetOverride(asset, { uri: 'file:///path/to/wrench.png' })
+})
+```
+
+Callbacks run inside the registration call, so an override added there applies to the asset's first use. Assets of different types can share a name, so `onAssetRegistered` may run more than once for one name. Both functions return an unsubscribe function you can pass to `cleanup()`.
+
+<Callout title="Manifest icon field">
+    Manifest `icon` properties take asset names (such as `'WrenchIcon'`) or `data:` URIs. To inspect available icons, evaluate `[...valenced.assets.getAssets()].filter(a => a.name.includes('Icon'))` in DevTools.
+</Callout>

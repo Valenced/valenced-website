@@ -1,0 +1,162 @@
+---
+title: Repositories
+description: Plugin repositories, dependency resolution, the install pipeline, updates, and stub plugins.
+icon: PackageOpen
+---
+
+Valenced distributes plugins like a Linux package manager. Repositories are static files, the client resolves dependencies itself, and installs and updates share one pipeline. Native does the work (`tweaks/plugins/repos/`). JavaScript drives it and decides policy (`lib/plugins/src/_internal/repositories.ts`, `src/plugins/start/settings.plugins/`).
+
+## Repository format
+
+A repository is one `index.json` served over HTTPS. Its URL is its identity.
+
+```jsonc
+{
+    "format": 1,
+    "name": "My Repository",
+    "description": "...",
+    "icon": "GlobeEarthIcon",
+    "plugins": {
+        "com.example.plugin": {
+            "name": "Example",
+            // ...display metadata
+            "channels": { "latest": "1.2.0", "beta": "1.3.0-beta1" },
+            "versions": {
+                "1.2.0": {
+                    "url": "https://example.com/pool/com.example.plugin@1.2.0.zip",
+                    "sha256": "...",
+                    "size": 12345,
+                    "dependencies": { "valenced.api": { "version": ">=1 <2" } }
+                }
+            }
+        }
+    }
+}
+```
+
+Parsing only fails on invalid JSON or an unknown `format`. Everything else degrades per entry. A bad version, channel, or plugin is dropped with a warning, so one broken entry never takes down a repository.
+
+Icons never cause network requests. Manifest and index icons must be a Discord asset name or a size-capped `data:` URL. Validation strips anything else.
+
+## State on disk
+
+```text
+files/valenced/plugins/repos/
+  repos.json             # { format: 1, repos: [{ url, enabled }] }, ordered by priority
+  sources.json           # provenance per plugin ID
+  cache/<sha256(url)>/   # last valid index.json and its ETag, per repository
+```
+
+Each plugin's **source** in `sources.json` records:
+
+- `repo`: the repository it came from, or `null` for a sideloaded plugin.
+- `channel`: the channel it follows, `latest` by default.
+- `hash`: the SHA-256 of the installed artifact.
+- `held`: whether updates are paused.
+
+A hold stores no version. It means "keep whatever is installed", so it can't drift from what is on disk.
+
+## Refreshing
+
+`valenced.plugins.repos.refresh(url)` refreshes one repository with a conditional GET. A failed refresh keeps the last valid index. JavaScript refreshes all repositories with `Promise.all`, and each sends `repoStateUpdate` events (`refreshing`, then `ready` or `error`).
+
+`repos.listPlugins(url)` and `listUpdates` only read cached indexes. Browsing the UI refreshes first, so the cache is fresh enough.
+
+`repos.set(config)` replaces the whole repository list in one write. Removing a repository drops its cache and clears `repo` in the sources of its plugins. Those plugins stay installed, as sideloaded.
+
+### Internal repository
+
+`valenced://internal` is a virtual repository, always listed first. It serves internal plugins and `valenced.api` at their built-in versions, so browsing and resolution treat internal plugins like any other plugin. It never offers updates, since internal plugins update with Valenced itself. Users can't add or remove it.
+
+## Resolution
+
+`valenced.plugins.planInstall(id, options?)` resolves one plugin against the cached indexes. It returns a **plan as a value** and changes nothing. JavaScript shows the plan, and the user confirms it before anything downloads.
+
+Resolution follows these rules (`repos/Resolver.kt`):
+
+- **Repository choice:** A plugin with a source resolves only from its recorded repository. A new plugin resolves from the first enabled repository that serves it.
+- **Root version:** An exact targeted version, else the followed channel's pointer, else the newest version without a label.
+- **Dependency versions:** The newest unlabeled version that satisfies every planned dependent's range. Range checks compare numbers only, so `1.5-rc` satisfies `>=1 <2`.
+- **Fallbacks:** A chosen version whose own required dependencies can't resolve falls back to the newest older version that can. For example, a channel pointing at a version that needs a newer Discord resolves to the newest version that works. An exact targeted version never falls back.
+- **Strict channels:** Like npm's dist-tags, a targeted `channel` means exactly what it points to. If that version can't resolve, the plan fails. Set `compatible` on the target to allow fallbacks. A channel that comes from the plugin's source, not from a target, always falls back.
+- **Recursion:** Missing required dependencies are planned too. An unresolvable required dependency fails the plan with `RESOLVE_FAILED`. An unresolvable optional one becomes a warning, including one whose own dependencies can't resolve.
+- **Holds:** A held dependency stays at its version. If that breaks a dependent, the plan fails with a hint to allow updates. The requested plugin itself is never constrained by its own hold.
+- **Reinstalls:** A plugin already at the chosen version is still planned when its repository, channel, hold, or artifact hash would change.
+- **Conflicts:** A planned version outside an installed dependent's range is a warning, not a failure.
+
+`options.targets` sets rules per plugin ID, with the root's under its own ID:
+
+| Target field | Effect |
+| --- | --- |
+| `repo` | Resolve from this repository. This is how a plugin moves between repositories. |
+| `version` | Install exactly this version and hold it. |
+| `channel` | Follow this channel and install exactly what it points to. Picking a channel resumes updates. |
+| `compatible` | With `channel`, fall back to the newest older version that resolves. For a dependency, the fallback stays inside its dependents' ranges. |
+
+The plugin settings plugin sets `compatible` by default, for installs from Browse and for updates. The user turns it off by picking a channel under **Follow a channel**.
+
+Each planned action carries what the UI needs, so JavaScript never does version math:
+
+- `channel` and `hold` to record, where `hold` is `true`, `false`, or `null` to keep the current value.
+- `channelVersion`: the version the channel points to, when the action fell back below it. Otherwise `null`.
+- `dependents`: which planned plugins pulled it in, and with what range.
+- `candidates`: for each repository serving it, the versions that satisfy every planned dependent, each with the installed plugins it would break.
+
+## Installing
+
+`valenced.plugins.install(plan)` runs one confirmed plan (`repos/RepoInstall.kt`):
+
+1. **Download** every artifact. `downloadProgress` events report progress, throttled to about every 150 ms or 10%.
+2. **Verify** every artifact: size, SHA-256, then the manifest inside the ZIP. The artifact's own manifest is the authority. Any ID or version mismatch aborts the whole plan, with `dist/` untouched.
+3. **Apply** dependencies before dependents. Each ZIP extracts to `dist/.install/`, then atomically replaces `dist/<id>/`.
+4. **Record** each plugin's source: repository, channel, hash, and hold.
+
+Plans run one at a time in FIFO order. When a plan's turn comes, native checks each action again and skips it if the live version, or an identical pending update, already matches. An action whose exact artifact is already on disk skips the download and only updates its source.
+
+`install` answers `{ installed, pending, skipped }`:
+
+- **Installed:** Fresh IDs register at once, disabled, through `pluginInstallResult`.
+- **Pending:** Updates of installed plugins land on disk only and send `pluginUpdated`. Fresh IDs that depend on a pending update also wait for the reload.
+
+### Sideloading
+
+Sideloading goes through the same apply step:
+
+1. `valenced.plugins.installFile` opens the system file picker.
+2. Native extracts the picked ZIP to a staging directory and validates its manifest. A ZIP without `manifest.json` fails right away.
+3. Native sends `pluginInstallFileReady` with a token and the manifest. Nothing has changed yet.
+4. JavaScript shows a confirmation, then answers with `valenced.plugins.confirmInstallFile(token, accepted)`.
+5. Accepting applies the staged plugin with no repository. Declining or a stale token discards it.
+
+## Updates
+
+`valenced.plugins.listUpdates` resolves every possible update like an install (`repos/Updates.kt`):
+
+- A plugin has an update when its followed channel points past its installed version, or past its pending update.
+- A plugin also has an update when the same version was republished with a different artifact hash.
+- When the channel's version can't resolve, the update offers the newest older version that can, with `channelVersion` set. If that version isn't newer than the installed one, there is no update.
+- Each update resolves with `skipMissingOptionals`, so it never pulls in optional dependencies the user doesn't have.
+- **Blockers** stop an update from installing: a hold on the plugin, a held dependency outside the new range, or a failed resolution.
+- **Warnings** flag updates that would break other installed plugins. A warning points to the other plugin's update that would fix it, when one exists.
+
+Native never starts network work on its own. JavaScript owns the policy:
+
+- After startup, the plugin settings plugin refreshes repositories and applies all updates, at most once an hour. It skips metered networks when the user asks.
+- The **Plugin Updates** page lets the user pick which updates to install.
+
+## Stub plugins
+
+A **stub** is an internal plugin with a **default source**: a repository and channel it can update from. `stubPlugin(...)` declares one natively. A bundle manifest entry with `defaultSource` declares one for bundled plugins. The Themes plugins (`valenced.api.themes` and `valenced.settings.themes`) are bundled stubs with version `0.0.0`, so any release from the default repository updates them.
+
+1. At boot, native records the default source for a stub with no source yet. It never overwrites an existing one.
+2. Once a newer copy is installed from that repository, the internal ID has a source and a copy in `dist/`. Native marks it **shadowed** and loads the installed copy as an external plugin.
+3. **Uninstall updates** runs a normal uninstall, then registers the stub again and records its default source. `uninstall` answers with the restored plugin, so JavaScript can register it right away. The stub loads at the next boot or when started.
+
+For a bundled stub, JavaScript registers the bundled manifest before the native list arrives. When native reports the ID as external, JavaScript unregisters the bundled entry and keeps its flags, then registers the installed copy. A bundled implementation is never attached to an external plugin.
+
+Two guards keep this safe:
+
+- `planInstall`, `install`, and sideloading refuse internal IDs that have no source. Without this, a repository could replace `valenced.api` or the recovery plugin.
+- `setHeld` accepts internal IDs with a source, so updates of a stub can be paused.
+
+The plugin list payload marks such plugins with `hasStub`. The UI then shows **Uninstall updates** instead of **Uninstall**.

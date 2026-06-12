@@ -1,0 +1,166 @@
+---
+title: Migrating from Revenge
+description: Port a Revenge Next plugin to Valenced.
+icon: ArrowRightLeft
+---
+
+Valenced is Revenge Next under a new name. The plugin APIs behave the same, but every package, plugin ID, native class, and bridge method was renamed, and the API version starts over at `1.0.0`. Revenge plugins don't load in Valenced until you port them.
+
+Most of the work is search and replace. If your repository came from the plugin template, compare it with the [Valenced plugin template](https://github.com/Valenced/valenced-plugin-template), which went through the same changes.
+
+## Checklist
+
+1. Update the [dependencies](#dependencies) in `package.json`, and reinstall.
+2. Rename [imports, globals, and types](#javascript).
+3. Rename [plugin IDs](#manifests) in every `manifest.json`, and reset the `valenced.api` range.
+4. Update the [native setup](#native-plugins): the Maven repository, the API coordinates, and the Kotlin imports.
+5. Rename [bridge methods](#bridge-methods) you call on Valenced itself.
+6. Bump each plugin's version, rebuild, and republish your [repository](#repositories).
+
+## Dependencies
+
+| Revenge | Valenced |
+| --- | --- |
+| `@revenge-mod/types` (`revenge-mod/revenge-types`) | `@valenced/types` ([`Valenced/valenced-types`](https://github.com/Valenced/valenced-types)) |
+| `@revenge-mod/themes-api` (`revenge-mod/revenge-themes-types`) | `@valenced/themes-api` ([`Valenced/valenced-themes-types`](https://github.com/Valenced/valenced-themes-types)) |
+| `@revenge-mod/plugin-cli` (`revenge-mod/revenge-plugin-cli`) | `@valenced/plugin-cli` ([`Valenced/valenced-plugin-cli`](https://github.com/Valenced/valenced-plugin-cli)) |
+| `revenge-plugin` command | `valenced-plugin` command |
+
+```json title="package.json"
+{
+    "scripts": {
+        "build": "valenced-plugin build",
+        "generate-index": "valenced-plugin generate-index",
+        "plan-releases": "valenced-plugin plan-releases",
+        "serve": "valenced-plugin serve"
+    },
+    "dependencies": {
+        "@valenced/plugin-cli": "git+https://github.com/Valenced/valenced-plugin-cli.git",
+        "@valenced/types": "git+https://github.com/Valenced/valenced-types.git",
+        "@valenced/themes-api": "git+https://github.com/Valenced/valenced-themes-types.git"
+    },
+    "trustedDependencies": ["@valenced/plugin-cli"]
+}
+```
+
+<Callout title="DevTools keep their names">
+    There are no Valenced DevTools packages yet. Keep `@revenge-mod/devtools-server`, `@revenge-mod/devtools-client`, `@revenge-mod/devtools-shared`, and the `revenge-devtools` command as they are.
+</Callout>
+
+## JavaScript
+
+Every `@revenge-mod/*` module is now `@valenced/*`, with the same paths and exports:
+
+```ts
+import { before } from '@revenge-mod/patcher' // [!code --]
+import { before } from '@valenced/patcher' // [!code ++]
+import { lookupModule } from '@revenge-mod/modules/finders' // [!code --]
+import { lookupModule } from '@valenced/modules/finders' // [!code ++]
+```
+
+The CLI rewrites imports to the `valenced` argument instead of `revenge`, so `@valenced/patcher` becomes `valenced.patcher`. If your code reads the API object directly, rename it too:
+
+| Revenge | Valenced |
+| --- | --- |
+| `revenge.*` (plugin argument and global) | `valenced.*` |
+| `revenge.hidden.*` | `valenced.hidden.*` |
+| `globalThis.revenge` (Developer Mode) | `globalThis.valenced` |
+| `"types": ["@revenge-mod/types", "@revenge-mod/types/hidden"]` | `"types": ["@valenced/types", "@valenced/types/hidden"]` |
+| `/// <reference types="@revenge-mod/themes-api" />` | `/// <reference types="@valenced/themes-api" />` |
+| `declare module '@revenge-mod/modules/native'` | `declare module '@valenced/modules/native'` |
+
+Update `tsconfig.json` (or the template's `tsconfig.base.json`) to the new `types` entries. Other renames that plugins may touch:
+
+| Revenge | Valenced |
+| --- | --- |
+| `Revenge*` setting keys, such as `RevengePlugins` | `Valenced*`, such as `ValencedPlugins` |
+| The `REVENGE` settings section | `VALENCED` |
+| `RevengeIcon` asset (icon packs) | `ValencedIcon` |
+| `revenge-mod/revenge-community-plugins` | [`Valenced/valenced-community-plugins`](https://github.com/Valenced/valenced-community-plugins) |
+
+## Manifests
+
+Rename every dependency on a built-in plugin from `revenge.*` to `valenced.*`:
+
+| Revenge | Valenced |
+| --- | --- |
+| `revenge.api` | `valenced.api` |
+| `revenge.api.hidden` | `valenced.api.hidden` |
+| `revenge.api.themes` | `valenced.api.themes` |
+| `revenge.settings`, `revenge.settings.plugins` | `valenced.settings`, `valenced.settings.plugins` |
+
+The API version starts over at `1.0.0`, and Valenced 1.0.0 already has every Revenge API up to 1.2.1, `dexFinder` included. A range like `>=1.2.1 <2` would never match, so reset it:
+
+```jsonc title="manifest.json"
+{
+    "dependencies": {
+        "revenge.api": { "version": ">=1.2.1 <2" }, // [!code --]
+        "valenced.api": { "version": ">=1 <2" }, // [!code ++]
+        "discord": { "version": "*" }
+    }
+}
+```
+
+The reserved `discord` dependency is unchanged. Your own plugin ID can stay the same. Bump your plugin's version anyway, so it gets a fresh artifact.
+
+## Native plugins
+
+The native API moved to the [Valenced monorepo](https://github.com/Valenced/valenced) and is published under new coordinates:
+
+| Revenge | Valenced |
+| --- | --- |
+| `io.github.revenge:api` | `app.valenced:api` |
+| `maven.pkg.github.com/revenge-mod/revenge-xposed` | `maven.pkg.github.com/Valenced/valenced` |
+| `io.github.revenge.*` packages | `app.valenced.*` |
+| `RevengeBridge` | `ValencedBridge` |
+
+```toml title="gradle/libs.versions.toml"
+[versions]
+revengeApi = "1.2.1" # [!code --]
+valencedApi = "1.0.0" # [!code ++]
+
+[libraries]
+revenge-api = { module = "io.github.revenge:api", version.ref = "revengeApi" } # [!code --]
+valenced-api = { module = "app.valenced:api", version.ref = "valencedApi" } # [!code ++]
+```
+
+In `settings.gradle.kts`, point the GitHub Packages repository at `https://maven.pkg.github.com/Valenced/valenced`. Your `read:packages` token keeps working. In `build.gradle.kts`, use `libs.valenced.api` as the `compileOnly` dependency.
+
+Then update the Kotlin imports:
+
+```kotlin
+import io.github.revenge.plugins.plugin // [!code --]
+import io.github.revenge.xposed.api.registerNativeMethod // [!code --]
+import io.github.revenge.bridge.asDelegate // [!code --]
+import app.valenced.plugins.plugin // [!code ++]
+import app.valenced.xposed.api.registerNativeMethod // [!code ++]
+import app.valenced.bridge.asDelegate // [!code ++]
+```
+
+To build against an unpublished API, publish it from the monorepo. `app.valenced:api` depends on `app.valenced:core`, so publish both:
+
+```sh
+./gradlew :core:publishToMavenLocal :android:api:publishToMavenLocal
+```
+
+## Bridge methods
+
+Methods your plugin registers under its own ID, such as `com.example.plugin.ping`, don't change. Methods and events that Valenced provides are renamed from `revenge.*` to `valenced.*`:
+
+| Revenge | Valenced |
+| --- | --- |
+| `revenge.fs.read`, `revenge.app.reload` | `valenced.fs.read`, `valenced.app.reload` |
+| `revenge.plugins.*`, `revenge.plugins.events.*` | `valenced.plugins.*`, `valenced.plugins.events.*` |
+| `revenge.themes.*` | `valenced.themes.*` |
+| The `RevengeBridge` callable module | `ValencedBridge` |
+| `revenge://internal` | `valenced://internal` |
+
+See [Native](/docs/plugin-development/api-reference/native) for the full list.
+
+## Repositories
+
+The repository format and the CLI commands are unchanged. Rebuild every plugin with the Valenced CLI and republish your `index.json`. Artifacts built for Revenge declare `revenge.api` instead of `valenced.api`, so Valenced rejects their manifests.
+
+<Callout type="warn" title="Saved data doesn't carry over">
+    Valenced keeps its files in `files/valenced/` instead of `files/revenge/`, and doesn't import Revenge's data. Users start with no repositories, plugins, or plugin storage. If your plugin keeps important settings, tell your users to note them before they switch.
+</Callout>

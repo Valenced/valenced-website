@@ -1,0 +1,52 @@
+---
+title: Common Issues
+description: Solutions to frequently encountered problems.
+icon: LifeBuoy
+---
+
+## A plugin broke my client
+
+1. If settings open normally: navigate to **Settings > Valenced > Plugins** and disable the offending plugin.
+2. If the app fails to start: tap **Recovery** on the **Valenced Error** dialog, then tap **Enter Recovery Mode**. The app will restart with only built-in default plugins running.
+   Open settings and disable the culprit plugin. Non-default plugins will run again on the next normal reload unless explicitly disabled.
+3. Check for updates: plugins update independently of Valenced, and an update in the plugin browser may resolve the issue.
+
+### Opening Recovery Options
+
+If the app opens but freezes or misbehaves before you can reach settings, open **Valenced Recovery Options** with a gesture:
+
+1. Open the app.
+2. Within the first 3 seconds, hold two fingers on the screen.
+3. Keep holding for 3 seconds until the options appear.
+
+The options are:
+
+- **Reload:** Restarts the app.
+- **Enter Recovery Mode:** Restarts the app with only built-in default plugins running.
+
+Debug builds of the loader add two more options for developers:
+
+- **Delete Downloaded Bundle:** Deletes the downloaded development bundle and restarts the app.
+- **Reset Loader Config:** Resets the loader configuration, such as a custom bundle URL, and restarts the app with the shipped bundle.
+
+### Automatic Recovery Mode
+
+If the app crashes 3 times in a row while starting, Valenced boots into Recovery Mode on its own and tells you about it. Tap **Exit Recovery Mode** to go back to a normal boot.
+
+### Inside Recovery Mode
+
+Recovery Mode never changes your saved setup. While it runs, the plugin list shows the plugins you normally run, so you can disable or uninstall the one causing trouble. Other plugins can't be started until you leave.
+
+Tap **Exit Recovery Mode** on the banner in **Settings > Valenced > Plugins**, or reload the app, to leave Recovery Mode.
+
+## Native Android plugins are not working
+
+If you see `NoClassDefFoundError: Failed resolution of: Lde/robv/android/xposed/...;` in logs, check if your Xposed manager has **Xposed API call protection** enabled.
+
+Disable API call protection. Valenced requires dynamically loaded plugins to access Xposed APIs.
+
+If the error persists, check with the plugin author to confirm compatibility with your app version.
+
+## Still stuck?
+
+Check out [Support](/docs/troubleshooting/support) for links to community help and issue trackers.

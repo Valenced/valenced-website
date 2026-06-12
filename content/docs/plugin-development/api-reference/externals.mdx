@@ -1,0 +1,118 @@
+---
+title: Externals
+description: Bundled third-party libraries exported for plugin use.
+icon: Library
+---
+
+Discord bundles several third-party libraries. `@valenced/externals` exposes cached references to these packages:
+
+## Shopify (`@valenced/externals/shopify`)
+
+```tsx
+import { FlashList } from '@valenced/externals/shopify'
+
+<FlashList.FlashList
+    data={items}
+    renderItem={({ item }) => <Row item={item} />}
+/>
+```
+
+## React Navigation (`@valenced/externals/react-navigation`)
+
+```ts
+import {
+    ReactNavigationNative, // @react-navigation/native
+    ReactNavigationStack,  // @react-navigation/stack
+} from '@valenced/externals/react-navigation'
+
+const { useNavigation, NavigationContainer } = ReactNavigationNative
+const { createStackNavigator } = ReactNavigationStack
+```
+
+Use `useNavigation()` inside custom screens to control navigation transitions. Extend `ReactNavigation.RootParamList` to type custom routes.
+
+## Safe area context (`@valenced/externals/react-native-safe-area-context`)
+
+`react-native-safe-area-context` exports (`useSafeAreaInsets`) for managing notch and navigation bar padding.
+
+## Clipboard (`@valenced/externals/react-native-clipboard`)
+
+`@react-native-clipboard/clipboard`:
+
+```ts
+import { Clipboard } from '@valenced/externals/react-native-clipboard'
+
+await Clipboard.setString('copied!')
+```
+
+## Bottom sheets (`@valenced/externals/gorhom`)
+
+`@gorhom/bottom-sheet`:
+
+```tsx
+import { BottomSheet } from '@valenced/externals/gorhom'
+
+const { BottomSheetModal, BottomSheetScrollView } = BottomSheet
+```
+
+## React Native Community (`@valenced/externals/react-native-community`)
+
+`@react-native-community/netinfo` for network state:
+
+```ts
+import { NetInfo } from '@valenced/externals/react-native-community'
+
+const { details } = await NetInfo.fetch()
+if (details?.isConnectionExpensive) {
+    // Skip large downloads on metered connections
+}
+```
+
+Inside components, use the `NetInfo.useNetInfo()` hook instead.
+
+## Zustand (`@valenced/externals/zustand`)
+
+Valenced ships its own copy of [zustand](https://zustand.docs.pmnd.rs), the one it uses for plugin state. It is not Discord's copy.
+
+```ts
+import { ZustandVanilla } from '@valenced/externals/zustand'
+
+const store = ZustandVanilla.createStore(() => ({ count: 0 }))
+```
+
+The module exports `Zustand` (`zustand`), `ZustandVanilla` (`zustand/vanilla`), and `ZustandReact` (`zustand/react`).
+
+You can also import `zustand`, `zustand/vanilla`, and `zustand/react` directly. The plugin CLI rewrites them to Valenced's copy, so your plugin doesn't bundle its own.
+
+<Callout type="warn" title="Keep React out of preinit">
+    `zustand` and `zustand/react` import React, which isn't available at `preInit`. Use `zustand/vanilla` in code that runs that early.
+</Callout>
+
+## Browserify polyfills (`@valenced/externals/browserify`)
+
+Node polyfills bundled by Discord:
+
+```ts
+import { nodeUtil } from '@valenced/externals/browserify'
+
+nodeUtil.inspect(someObject, { depth: 3 })
+```
+
+## Runtime access
+
+At runtime, externals attach to `valenced.externals` with PascalCase property names:
+
+| Package | Runtime access |
+| --- | --- |
+| `@valenced/externals/shopify` | `valenced.externals.Shopify` |
+| `@valenced/externals/react-navigation` | `valenced.externals.ReactNavigation` |
+| `@valenced/externals/react-native-clipboard` | `valenced.externals.ReactNativeClipboard` |
+| `@valenced/externals/react-native-safe-area-context` | `valenced.externals.ReactNativeSafeAreaContext` |
+| `@valenced/externals/gorhom` | `valenced.externals.Gorhom` |
+| `@valenced/externals/react-native-community` | `valenced.externals.ReactNativeCommunity` |
+| `@valenced/externals/zustand` | `valenced.externals.Zustand` |
+| `@valenced/externals/browserify` | `valenced.externals.Browserify` |
+
+<Callout>
+    Externals are wrapped in lazy proxies. The underlying module lookup runs on first property access.
+</Callout>

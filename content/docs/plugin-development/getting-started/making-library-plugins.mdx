@@ -1,0 +1,182 @@
+---
+title: Making Library Plugins
+description: Share common code, utilities, and scoped APIs between Valenced plugins.
+icon: Library
+---
+
+Library plugins allow sharing code, utilities, or states across multiple plugins without duplicating code.
+
+Valenced includes dependency management and lifecycle decoration hooks that allow libraries to expose APIs directly to dependent plugins.
+
+## How dependencies work
+
+Any plugin can act as a library without special configurations. Dependent plugins declare the library under `dependencies` in their `manifest.json`:
+
+```json title="manifest.json (dependent plugin)"
+{
+    "format": 1,
+    "id": "com.example.my-plugin",
+    "name": "My Plugin",
+    "version": "1.0.0",
+    "dependencies": {
+        "valenced.api": { "version": ">=1 <2" },
+        "discord": { "version": "*" },
+        "com.example.my-library": { "version": ">=1.0.0 <2" }
+    }
+}
+```
+
+### Lifecycle guarantees
+
+When a plugin declares a library dependency:
+
+- **Startup ordering:** The library initializes and starts before dependent plugins run `init` or `start`.
+- **Cascading stop:** Stopping or disabling a library automatically stops all active dependent plugins first. When a user disables it, Valenced asks which optional dependents keep running. Those restart without the library.
+- **Late linking:** An optional dependent that started while the library was off stays unlinked. When the library starts, Valenced offers to restart those dependents so they can pick it up.
+- **Dependency resolution:** Installing a plugin from a repository resolves and installs its required dependencies automatically. Updates pick versions that keep every dependent's version range satisfied.
+
+### Native libraries
+
+A native plugin can call into a native library's classes when it declares the library as a dependency. Valenced links the dependent's class loader to the library's only while the library runs.
+
+- Stopping a native library also stops every plugin linked to it.
+- Restarting a dependent links it again, so it picks up a library that was installed or enabled after it started.
+- Don't keep references to a library's objects after it stops. A restart may load its classes again.
+
+## Exposing APIs: Unscoped vs. Scoped
+
+Libraries can expose APIs in two ways:
+
+1. **Unscoped API (`unscoped`):** Best for global utilities, stateless functions, or shared singletons that do not need caller context.
+2. **Scoped API (`decorate`):** Best when the library needs access to the calling plugin instance (such as its `id`, manifest, or logger), needs to attach methods directly to `plugin.api`, or needs to clean up state when the caller stops.
+
+## Modifying the unscoped API
+
+If your library provides global utilities that do not depend on a specific plugin instance, assign them to `unscoped` once during `start`:
+
+```ts title="com.example.my-library/js/index.ts"
+export default plugin({
+    start({ unscoped }) {
+        unscoped.myLibrary = {
+            formatTimestamp(timestamp: number): string {
+                return new Date(timestamp).toLocaleTimeString()
+            },
+            calculateSum(a: number, b: number): number {
+                return a + b
+            },
+        }
+    },
+    stop({ unscoped }) {
+        delete unscoped.myLibrary
+    },
+})
+```
+
+### Consuming unscoped APIs
+
+When consumers reference your library's augmented type declarations, TypeScript recognizes properties attached to `unscoped`:
+
+```ts title="com.example.my-plugin/js/index.ts"
+import type {} from 'com.example.my-library' // imports type augmentations
+
+export default plugin({
+    start({ unscoped, logger }) {
+        const time = unscoped.myLibrary.formatTimestamp(Date.now())
+        logger.log(`Current time: ${time}`)
+    },
+})
+```
+
+## Scoped APIs with `decorate`
+
+When your library provides functionality scoped to each caller (such as per-plugin instances or state keyed by plugin ID), use `decorate`.
+
+The `decorate` function registers a callback that runs for every dependent plugin when that dependent initializes:
+
+```ts title="com.example.my-library/js/index.ts"
+export default plugin({
+    start({ decorate }) {
+        decorate(plugin => {
+            const pluginId = plugin.manifest.id
+
+            // Attach methods directly to the dependent's api object
+            plugin.api.myLibrary = {
+                getCallerId() {
+                    return pluginId
+                },
+                sendCustomNotification(text: string) {
+                    console.log(`[Notification from ${pluginId}]: ${text}`)
+                },
+            }
+
+            // Return a cleanup callback if needed
+            return () => {
+                delete plugin.api.myLibrary
+            }
+        })
+    },
+})
+```
+
+### Automatic cleanup registration
+
+When the decorator callback returns a function, Valenced automatically registers that function with the dependent plugin's `plugin.api.cleanup()`.
+
+When the dependent plugin stops:
+1. The returned cleanup callback executes automatically.
+2. The library can unregister event listeners or remove attached properties.
+
+### Consuming decorated APIs
+
+Because the library attached properties to `plugin.api`, dependent plugins receive them directly in their lifecycle arguments with full type support via declaration merging:
+
+```ts title="com.example.my-plugin/js/index.ts"
+import type {} from 'com.example.my-library'
+
+export default plugin({
+    start({ myLibrary, logger }) {
+        logger.log(`Caller ID: ${myLibrary.getCallerId()}`)
+        myLibrary.sendCustomNotification('Hello from dependent plugin')
+    },
+})
+```
+
+## TypeScript declarations
+
+To provide type safety and autocomplete for consumers, export module augmentations:
+
+```ts title="com.example.my-library/types/index.d.ts"
+export interface ScopedLibraryApi {
+    getCallerId(): string
+    sendCustomNotification(text: string): void
+}
+
+export interface UnscopedLibraryApi {
+    formatTimestamp(timestamp: number): string
+    calculateSum(a: number, b: number): number
+}
+
+declare module '@valenced/plugins/types' {
+    interface PluginApi {
+        myLibrary: ScopedLibraryApi
+    }
+
+    interface UnscopedPluginApi {
+        myLibrary: UnscopedLibraryApi
+    }
+}
+```
+
+## Best practices
+
+- **Select the appropriate scope:** Use `unscoped` for pure, stateless functions. Use `decorate` only when you require the caller's plugin instance or manifest metadata.
+- **Register cleanup callbacks:** Return a cleanup function from `decorate` when attaching properties or registering event hooks so state is torn down cleanly when dependent plugins stop.
+- **Support optional dependencies:** When declaring libraries with `"optional": true`, verify that the API exists before calling its methods:
+  ```ts
+  start({ myLibrary }) {
+      if (myLibrary) {
+          myLibrary.sendCustomNotification('Ready')
+      }
+  }
+  ```
+- **Avoid heavy work in decorators:** Decorator functions execute during the startup path. Defer expensive operations until methods are invoked.

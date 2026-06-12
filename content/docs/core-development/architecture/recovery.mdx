@@ -1,0 +1,74 @@
+---
+title: Recovery
+description: How Valenced detects broken boots and gets users back to a working client.
+icon: LifeBuoy
+---
+
+A bad plugin can crash Discord at startup, freeze it, or break its UI. Recovery gives users a way out of each case without reinstalling. It spans two plugins with one ID, `valenced.recovery`:
+
+- The **native half** (`tweaks/plugins/internal/RecoveryPlugin.kt`) works even when JavaScript never runs.
+- The **JavaScript half** (`src/plugins/preinit/recovery/`) catches problems inside the bundle.
+
+Both halves are essential, so they always run.
+
+## Recovery Mode
+
+Every recovery path ends in the same place: **Recovery Mode**, a one-shot boot into the `:defaults` slot. Only essential and enabled-by-default plugins run, and nothing written during the session reaches the user's saved setup. See [Plugin States](/docs/core-development/architecture/plugin-states#recovery-mode) for how the slot works.
+
+In Recovery Mode:
+
+- JavaScript shows a **Recovery Mode** alert at startup, and a banner on the plugins screen with **Exit Recovery Mode**.
+- `runPluginLate` refuses to start any plugin, and the Start button is disabled. Starting one plugin would defeat the clean boot.
+- The plugin list shows the user's real setup, so they can disable or uninstall the culprit.
+
+A reload leaves Recovery Mode, since the one-shot is used up. As a safety net, the native half resets the active slot to `primary` if it ever finds `:defaults` there.
+
+## Recovery options
+
+`showRecoveryAlert` opens the native **Valenced Recovery Options** dialog:
+
+| Option | Effect |
+| --- | --- |
+| **Reload** | Restarts the app. |
+| **Enter Recovery Mode** | Sets `:defaults` as a one-shot slot, then restarts. |
+| **Delete Downloaded Bundle** | Debug builds only. Deletes the downloaded development bundle, so the next launch downloads it again or uses the shipped bundle. |
+| **Reset Loader Config** | Debug builds only. Deletes `loader.json`, which turns off a custom bundle URL. |
+
+The [dev loader](/docs/core-development/architecture/native-loader#dev-loader) adds the last two. Release builds only show **Reload** and **Enter Recovery Mode**.
+
+Several entry points open it:
+
+- **Two-finger hold:** For the first 3 seconds after the activity starts, the native half hooks `Activity.dispatchTouchEvent`. Holding a second finger down for 3 seconds opens the options. A toast at 1.5 seconds tells the user to keep holding.
+- **Valenced Error dialog:** `valenced.alertError` shows a stack trace with a **Recovery** button.
+- **Valenced Update Failed dialog:** On debug builds, the dev loader's download failure dialog has a **Recovery** button.
+- **Shake gesture:** On debug builds, `discordDevSupport` opens the options instead of React Native's dev menu. Discord 352.2 and later no longer ship the dev menu, so the gesture does nothing there.
+- **Settings:** The JavaScript half registers **Enter Recovery Mode** in the Valenced settings.
+
+## Crash detection
+
+`recoveryCompanion` is a tweak, not a plugin, so it runs before any plugin can crash. It counts launches that don't survive startup:
+
+1. At each launch, it reads `files/valenced/recovery_crash_count` and writes it back plus one.
+2. If the count reached 3, it sets `:defaults` as a one-shot slot and resets the count. Plugin states load after it, so this boot already runs in Recovery Mode with no reload.
+3. The native half resets the count once the app stays up for 8 seconds. Closing the activity on purpose also resets it.
+4. On Android 11 and later, it also checks why the last process exited. A launch without an activity, such as one from a notification, never reaches step 3. If the last exit was not a crash or an ANR, the count resets.
+
+After an automatic recovery, the native half shows **Booted in Recovery Mode**, explaining that Valenced detected consecutive crashes.
+
+## Freeze detection
+
+Some bad plugins don't crash, they hang startup. The JavaScript half watches for this from `preInit`:
+
+1. While the app is in the foreground, it starts a 5-second timer once `runApplication` finishes.
+2. Discord dispatches `APP_STATE_UPDATE` when it finishes starting. That event cancels the timer for good.
+3. If the timer fires, the app never finished starting. Valenced shows the **Valenced Error** dialog, which explains this and lists `mErrorChain`: every module whose factory threw, with stacks.
+
+The first module in the chain usually points at the cause. See [Module System](/docs/core-development/architecture/module-system#failed-modules).
+
+## Error boundary
+
+Discord wraps its UI in an `ErrorBoundary` component. The JavaScript half patches its `render` to show Valenced's own error screen when the boundary catches an error. The screen shows the error and component stack, with **Enter Recovery Mode**, **Retry Render**, and **Reload** buttons.
+
+## Outdated loader
+
+The JavaScript half also checks the finder and asset caches at startup. When either one has an unexpected format version, it shows **Loader Outdated** with the loader's name and version. The bundle and loader are released together, so a mismatch usually means the loader needs an update.

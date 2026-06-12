@@ -1,0 +1,156 @@
+---
+title: Native Loader
+description: The Xposed entry point, tweaks, bundle loading, and on-device files.
+icon: Smartphone
+---
+
+The native loader is the first Valenced code to run. It prepares the process, decides which bundle to run, and injects it before Discord's own JavaScript. This page covers the Android loader.
+
+It spans three Gradle modules of the monorepo:
+
+- **`:android`** (`android/`) is the Xposed module itself. Everything on this page lives here unless noted.
+- **`:android:api`** (`android/api/`) is the public API for native plugins (`plugin { }`, `PluginScope`, `HostScope`, `ValencedBridge`). It is published as `app.valenced:api`, and plugins compile against it.
+- **`:core`** (`core/`) is the Kotlin Multiplatform code shared with the iOS loader: plugin manifests, versions, [plugin states](/docs/core-development/architecture/plugin-states), [repositories](/docs/core-development/architecture/repositories), and dependency resolution. It is published as `app.valenced:core`.
+
+## Entry point
+
+`Main.kt` implements `IXposedHookZygoteInit` and `IXposedHookLoadPackage`:
+
+1. `initZygote` records the module APK path. Script loading and the bundle manifest read assets from it.
+2. `handleLoadPackage` returns early unless `param.processName == param.packageName`. Discord runs ProcessPhoenix in a `:phoenix` process to restart the app. Hooking it too would run two copies of every tweak.
+3. It builds a `HostScope` with the app info, Discord's class loader, the bridge, the [`DexFinder`](#obfuscated-builds), and the module path.
+4. It applies every tweak in order, once per process.
+
+## Tweaks
+
+A **tweak** is a one-shot setup unit. Each one is a `val` declared with the `tweak { }` delegate:
+
+```kotlin
+val myTweak by tweak {
+    log.i("hello from ${appInfo.packageName}")
+    classLoader.loadClass("...").method("foo").hook { /* ... */ }
+}
+```
+
+The `val` name becomes the tweak's name and log tag. The block runs with a `Tweak` receiver, which is a `HostScope` plus a logger. When a tweak throws, the loader logs it and moves on to the next one.
+
+Tweaks are internal. Native plugins get the same `HostScope` through `PluginScope`, but cannot declare tweaks. The plugin system itself is a set of tweaks.
+
+### Order
+
+Order matters, since later tweaks use what earlier ones set up:
+
+| Stage | Tweaks | Purpose |
+| --- | --- | --- |
+| Framework | `lifecycleSupport`, `valencedBridgeSupport`, `scriptLoader`, `discordVersionRetriever` | Context and activity capture, the bridge, script loading hooks, and the Discord version. |
+| Static patches | `fixResources` | Rewrites resource lookups when the app was repackaged under another package name. |
+| Persistence | `caches`, `pluginStates`, `pluginRepos` | Module and asset caches, [plugin state slots](/docs/core-development/architecture/plugin-states), and [repositories](/docs/core-development/architecture/repositories). |
+| Bundle | `devLoader`, `valencedBundleManifest` | Starts the [development bundle](#dev-loader) download on debug builds, and reads the bundle manifest. |
+| Consumers | `recoveryCompanion`, `discordDevSupport`, `additionalBridgeMethods`, `pluginLoader`, `pluginMethods`, `pluginInstallMethods`, `valencedScriptLoader` | Crash counting, debug support, utility bridge methods, the [plugin system](/docs/core-development/architecture/plugin-system), and the bundle injector. |
+
+### Context and activity
+
+Many tweaks need an Android `Context` or the main `Activity`, which don't exist yet when tweaks apply. `lifecycleSupport` captures them:
+
+- The `Context` comes from `ContextWrapper.attachBaseContext`.
+- The `Activity` comes from the launcher activity's `onCreate`. The loader resolves the launcher activity from the package manager at the first `attachBaseContext`, following activity aliases.
+
+`withAppContext { }` and `withAppActivity { }` run a block right away when the object exists, or queue it until it does. Both are on `HostScope`, so plugins use them too.
+
+## Script loading
+
+React Native loads Discord's bundle through `loadScriptFromAssets` or `loadScriptFromFile` on the `JSBundleLoaderDelegate` that `ReactInstance.loadJSBundle` creates. Before 352.2, that was `ReactInstance$loadJSBundle$1`. On obfuscated builds, the loader finds the implementation of `JSBundleLoaderDelegate` whose `loadScriptFromFile` calls `ReactInstance`. `scriptLoader` hooks both methods:
+
+1. Before the original call runs, the hook calls every registered `ScriptInjector` in order.
+2. An injector can run Hermes bytecode from the module APK with `runAsset(name)`, or run a file with `runFile(path)`.
+3. The original call then loads Discord's bundle into the same runtime.
+
+`valencedScriptLoader` registers the Valenced injector. On release builds, it runs the bundle shipped in the module APK at `assets://valenced.bundle`, and nothing else. Debug builds go through the [dev loader](#dev-loader) first:
+
+1. With a custom URL configured, it waits up to 10 seconds for the first download attempt.
+2. It runs every file in `files/valenced/preloads/`, sorted by name.
+3. It runs the downloaded development bundle at `cache/valenced/bundle.js` when one exists.
+4. Otherwise, it runs the shipped bundle.
+
+## Dev loader
+
+Release builds never download or run code that isn't in the APK. `DevLoader` lives in the `debug` source set, and the `release` source set has a no-op with the same shape, so tweaks call it without checking the build type.
+
+On debug builds, `DevLoader` loads a development bundle in place of the shipped one:
+
+- The config comes from `files/valenced/loader.json`. Without `customLoadUrl.enabled` and a `url`, nothing downloads and the shipped bundle runs.
+- Downloads use a conditional GET with the stored ETag, so an unchanged bundle costs one `304` response.
+- The download starts as soon as the `Context` exists. The script loader waits for it, so a new bundle runs in the same launch.
+- The download times out after 10 seconds, or 5 seconds when a downloaded bundle exists. A user-initiated retry has no timeout.
+- A failure shows **Valenced Update Failed**, with buttons to retry in the background or open the recovery options. A successful retry shows a dialog with a reload button.
+- It also downloads the bundle manifest from `customLoadUrl.manifestUrl`, when set.
+- It adds **Delete Downloaded Bundle** and **Reset Loader Config** to the [recovery options](/docs/core-development/architecture/recovery). Resetting deletes `loader.json`, which returns to the shipped bundle.
+
+See [Contributing](/docs/core-development/contributing#the-bundle) for how to point a device at the bundle's development server.
+
+## Bundle manifest
+
+The bundle manifest describes the bundled JavaScript plugins, so native can resolve dependencies on them before any JavaScript runs. See [Build](/docs/core-development/architecture/build#bundle-manifest) for its shape.
+
+`valencedBundleManifest` picks one source, in order:
+
+1. On debug builds with a custom URL, the downloaded manifest at `cache/valenced/manifest.json`.
+2. `manifest.json` in the module APK's assets, built together with the shipped bundle.
+3. An empty manifest, versioned as the API version.
+
+A malformed source falls through to the next one. With an empty manifest, native doesn't know the bundled plugins, so a required dependency on one fails with `DEPENDENCY_MISSING`.
+
+## Discord version
+
+`discordVersionRetriever` reads `com.discord.BuildConfig.VERSION_NAME_RNA` and parses it as a Valenced version. The built-in `discord` provider plugin serves this version, which is what plugin manifests constrain with the reserved `discord` dependency.
+
+Discord 352.2 and later have no `BuildConfig` class. R8 inlined the version name into the method that builds Discord's `Discord-Android/<versionCode>;RNA` user agent. The loader reads the string constant from that method with `DexFinder.findString`.
+
+It also hooks Discord's bundle updater to record the OTA commit when Discord runs an over-the-air JavaScript update. On obfuscated builds, the loader finds the updater class by the `key_android_js_bundle` and `in_progress_ota_commit` strings it uses.
+
+## Obfuscated builds
+
+Discord 352.2 and later ship with R8 renaming. Most of Discord's own class and member names are gone, along with some React Native ones. Only kept names survive, such as JNI `native` methods, `@DoNotStrip` members, native modules and their `@ReactMethod`s, and manifest components like `com.discord.main.MainActivity`.
+
+Every tweak tries the old name first, then falls back to `DexFinder`. `DexFinder` wraps [DexKit](https://github.com/LuckyPray/DexKit) and finds classes, methods, fields, and string constants by what they contain, such as the strings a method uses or the methods it calls.
+
+- Results are cached in `cache/valenced/dexkit.json`. The cache key includes the size and modification time of Discord's APK and the module APK, so any update invalidates it. Misses are cached too.
+- Lookups during tweak setup share one DexKit bridge. The loader closes it once every tweak has applied. Later lookups that miss the cache open and close their own, which is slower.
+- Native plugins get the same finder as `dexFinder` on their scope. See [Finding obfuscated code](/docs/plugin-development/api-reference/native#finding-obfuscated-code).
+
+## Caches
+
+`caches` stores the module finder cache and the asset cache under `cache/valenced/`. The file names include Discord's `versionCode`, plus the OTA commit when there is one:
+
+```text
+cache/valenced/modules.<versionCode>[.<otaCommit>]
+cache/valenced/assets.<versionCode>[.<otaCommit>]
+```
+
+A Discord update or OTA update changes the name, so stale caches are never read. JavaScript reads and writes them through `valenced.caches.*`. See [Module System](/docs/core-development/architecture/module-system#caching) for what they hold.
+
+## Other tweaks
+
+- **`discordDevSupport`:** On debug builds, enables React Native's LogBox and opens the Valenced recovery options from the shake gesture. R8 strips React Native's dev support from Discord 352.2 and later, so the tweak does nothing there.
+- **`additionalBridgeMethods`:** Registers `valenced.fs.*` for file access and `valenced.app.reload`.
+- **`recoveryCompanion`:** Counts crashes at startup. See [Recovery](/docs/core-development/architecture/recovery).
+
+## Files on the device
+
+Everything lives in Discord's data directory (`/data/data/com.discord`):
+
+```text
+cache/valenced/
+  bundle.js             # downloaded development bundle (debug builds)
+  manifest.json         # downloaded bundle manifest (debug builds)
+  etag.txt              # ETag of the downloaded bundle (debug builds)
+  dexkit.json           # DexFinder cache
+  modules.*, assets.*   # finder and asset caches
+files/valenced/
+  loader.json           # loader config, custom bundle URL (debug builds)
+  preloads/             # scripts run before the bundle (debug builds)
+  recovery_crash_count  # consecutive startup crashes
+  plugins/              # plugin system (see Plugin States)
+```
+
+Release builds never read `loader.json` or `preloads/`.

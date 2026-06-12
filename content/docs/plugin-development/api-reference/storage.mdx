@@ -1,0 +1,104 @@
+---
+title: JSON Storage
+description: Persistent JSON storage with React hook integration.
+icon: Database
+---
+
+`@valenced/json-storage` provides file-backed JSON storage.
+
+```ts
+import { getJsonStorage } from '@valenced/json-storage'
+```
+
+<Callout title="Plugin storage">
+    Plugins access a pre-configured storage instance via [`api.jsonStorage`](/docs/plugin-development/api-reference/plugin-api#jsonstorage), targeting `storage.json` inside the plugin's data directory. Use `getJsonStorage` directly when managing additional data files.
+</Callout>
+
+## Creating a storage instance
+
+```ts
+interface Settings {
+    enabled: boolean
+    nested: { count: number }
+}
+
+const storage = getJsonStorage<Settings>('files/my-plugin/data.json', {
+    default: { enabled: true, nested: { count: 0 } },
+    load: true, // read file immediately at creation
+})
+```
+
+Path rules:
+
+- **Relative paths:** Resolve against the app data root (`/data/data/<pkg>` on Android). Use `files/...` for persistent data and `cache/...` for temporary files.
+- **Absolute paths:** Used directly.
+- **Plugin paths:** Use `pluginStoragePathFor(id, file)` to target paths in a plugin's data directory.
+
+## Reading and writing
+
+```ts
+// Read data (reads disk on first invocation, then cached)
+const settings = await storage.get()
+
+// Deep merge into existing data
+await storage.set({ nested: { count: 1 } })
+
+// Overwrite existing data completely
+await storage.set({ enabled: false, nested: { count: 0 } }, true)
+
+// Synchronous cached value
+storage.cache   // Settings | undefined (immutable view)
+storage.loaded  // boolean
+
+// Existence and deletion
+await storage.exists()
+await storage.delete()
+```
+
+## Subscriptions
+
+```ts
+import { JsonStorageUpdateMode } from '@valenced/json-storage'
+
+const unsub = storage.subscribe((update, mode) => {
+    // mode: JsonStorageUpdateMode.Merge | Replace | Load
+    // In Merge mode, `update` contains only the partial payload passed to set()
+    console.log(storage.cache)
+})
+```
+
+## React hook: `use()`
+
+Re-renders components when underlying storage updates (available from `init`):
+
+```tsx
+const SettingsStorage = getJsonStorage<Settings>('files/settings.json')
+
+function MyComponent() {
+    const settings = SettingsStorage.use()
+
+    // Filter updates to avoid redundant renders
+    const enabled = SettingsStorage.use(
+        update => update.enabled !== undefined,
+    )
+
+    if (!settings) return null
+    return <Text>{String(settings.enabled)}</Text>
+}
+```
+
+## Interface
+
+```ts
+interface JsonStorage<T> {
+    loaded: boolean
+    cache?: T
+    get(): Promise<T>
+    set(value: DeepPartial<T>): Promise<void>
+    set(value: T, replace: true): Promise<void>
+    use(filter?: (update: DeepPartial<T>, mode: number) => any): T | undefined
+    subscribe(cb: (update: DeepPartial<T>, mode: number) => void): () => void
+    exists(): Promise<boolean>
+    delete(): Promise<boolean>
+}
+```

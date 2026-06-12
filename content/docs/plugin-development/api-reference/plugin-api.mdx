@@ -1,0 +1,222 @@
+---
+title: Plugin API
+description: The scoped api object passed to plugin lifecycle methods.
+icon: Package
+---
+
+Lifecycle methods receive a scoped `api` argument (`PreInitPluginApi`, `InitPluginApi`, or `PluginApi` depending on the stage).
+
+```ts
+start(api) {
+    const { cleanup, decorate, plugin, unscoped, jsonStorage, logger } = api
+}
+```
+
+## `cleanup(...fns)`
+
+Registers teardown callbacks invoked when the plugin stops:
+
+```ts
+start({ cleanup }) {
+    cleanup(
+        before(SomeModule, 'method', hook), // returns unpatch callback
+        onFluxEventDispatched('TYPING_START', patch), // returns unsubscribe callback
+        () => myCustomTeardown(),
+    )
+}
+```
+
+Callbacks execute in reverse registration order when the plugin unloads.
+
+## `plugin`
+
+The [`Plugin` instance](/docs/plugin-development/api-reference/lifecycles#the-plugin-instance) representing the current plugin, exposing manifest data, error logs, and state methods (`disable()`, `stop()`, `requireReload()`).
+
+## `unscoped`
+
+The shared runtime object containing all `@valenced/*` packages:
+
+```ts
+interface UnscopedPluginApi {
+    modules: PluginApiModules      // finders, metro, native (with app and fs)
+    patcher: typeof import('@valenced/patcher')
+    plugins: PluginApiPlugins      // constants, utils
+    react: PluginApiReact          // React, ReactNative, jsxRuntime, native
+    assets: typeof import('@valenced/assets')
+    externals: PluginApiExternals  // Browserify, Gorhom, ReactNativeClipboard, ReactNativeCommunity, ...
+    utils: PluginApiUtils          // bitset, callback, error, object, promise, proxy, tree, react, discord (init+)
+    components: typeof import('@valenced/components') // init+
+    discord: PluginApiDiscord      // actions, common, design, flux, modules, native, utils
+    jsonStorage: typeof import('@valenced/json-storage') // from the Plugin API plugin
+}
+```
+
+Bundled `@valenced/*` imports compile to property accesses on this object.
+
+### `plugins.constants`
+
+```ts
+import { pluginStorageDirFor, pluginDistDirFor } from '@valenced/plugins/constants'
+
+pluginStorageDirFor('com.example.my-plugin') // plugin's data directory
+pluginDistDirFor('com.example.my-plugin')    // plugin's install directory (unpacked ZIP)
+```
+
+Plugin data survives updates. The install directory is replaced on every update, so read files from it only while starting.
+
+### `plugins.utils`
+
+```ts
+import {
+    formatVersion,
+    parsePluginContributor,
+    getPluginContributorName,
+} from '@valenced/plugins/utils'
+
+formatVersion(plugin.manifest.version) // '1.2.0-beta1'
+
+parsePluginContributor('You <123456789012345678> (https://example.com "Website")')
+// { name: 'You', ids: ['123456789012345678'], links: [{ url: 'https://example.com', label: 'Website' }] }
+
+getPluginContributorName(plugin.manifest.author) // 'You', or the raw string when unparseable
+```
+
+`parsePluginContributor` returns `null` when the string does not follow the [contributor format](/docs/plugin-development/getting-started/the-plugin-template#contributor-format).
+
+## `decorate(decorator)`
+
+Extends the `api` object provided to dependent plugins. The built-in Plugin API plugin uses this to inject `jsonStorage` and `logger`:
+
+```ts
+// Dependency plugin
+init({ decorate }) {
+    decorate((plugin, options) => {
+        plugin.api.customMethod = () => {
+            console.log(`Called from ${plugin.manifest.id}`)
+        }
+
+        // Optional: runs when the dependent stops
+        return () => {
+            delete plugin.api.customMethod
+        }
+    })
+}
+
+// Dependent plugin
+init({ customMethod }) {
+    customMethod()
+}
+```
+
+Decorators only reach plugins that declare the decorating plugin as a dependency. See [Making Library Plugins](/docs/plugin-development/getting-started/making-library-plugins) for a full guide.
+
+## Decorated APIs
+
+The built-in Plugin API plugin (`valenced.api`) decorates every plugin with these:
+
+### `jsonStorage`
+
+A per-plugin [`JsonStorage`](/docs/plugin-development/api-reference/storage) instance backed by `storage.json` inside the plugin's data directory. Stored data persists across updates. Configure eager loading in your plugin declaration:
+
+```ts
+{
+    jsonStorage: {
+        load: true,                  // read file eagerly at init
+        default: { enabled: true },  // fallback initial state
+        file: 'storage.json',        // filename in plugin storage folder
+    },
+    start({ jsonStorage }) {
+        jsonStorage.cache // populated when load: true
+    },
+}
+```
+
+### `logger`
+
+A Discord `Logger` instance tagged with your plugin ID (available from `init`):
+
+```ts
+start({ logger }) {
+    logger.log('hello')
+    logger.warn('careful')
+    logger.error('error encountered')
+}
+```
+
+Entries written to `logger` display in the in-app **Debug Logs** screen (**Settings > Valenced > Developer > Debug Logs**). Standard `console.log` statements stream to `adb logcat` and [DevTools](/docs/devtools).
+
+### `themes` (from `valenced.api.themes`)
+
+Only for plugins that depend on `valenced.api.themes`. Registers color themes, font packs, icon packs, and emoji packs. See [Themes](/docs/plugin-development/api-reference/themes).
+
+### `pluginSettings` (from `valenced.settings.plugins`)
+
+Only for plugins that depend on `valenced.settings.plugins`, and only from `start`. It gives access to the plugin management UI:
+
+```ts
+start({ pluginSettings }) {
+    // Open another plugin's options sheet or settings page
+    pluginSettings.showPluginOptionsSheet('com.example.other')
+    if (pluginSettings.hasPluginSettings('com.example.other'))
+        pluginSettings.openPluginSettings('com.example.other')
+}
+```
+
+| Member | Description |
+| --- | --- |
+| `showPluginOptionsSheet(id)` | Opens the options sheet of an installed plugin, like the Plugins page does. Throws if the plugin isn't installed. |
+| `hasPluginSettings(id)` | Returns whether an installed plugin has a settings page. |
+| `openPluginSettings(id)` | Opens the settings page of an installed plugin. Throws if the plugin isn't installed or has no settings. |
+| `claimPlugins(match)` | Hides plugins matching `match` from the Plugins and Browse Plugins pages, installed or not. Returns a function that removes the claim. Stopping your plugin also removes it. |
+| `PluginsPage` | The Plugins page, showing only installed plugins matching its `match` prop. `onBrowse` sets what the add button opens. |
+| `BrowsePage` | The Browse Plugins page, showing only listings matching its `match` prop. `empty` sets the message when nothing matches. |
+| `components.PluginIcon` | Renders a manifest icon (asset name or `data:` URI) with a puzzle piece fallback. |
+| `components.NavigatorHeaderWithIcon` | A settings page header with a plugin icon, `title`, and optional `subtitle`. |
+
+`claimPlugins` together with `PluginsPage` and `BrowsePage` lets a plugin manage a group of plugins on its own page. The Themes plugin does this for theme plugins:
+
+```tsx
+const isThemePlugin = (plugin: PluginMatchInfo) =>
+    'valenced.api.themes' in plugin.dependencies
+
+start({ pluginSettings, cleanup }) {
+    cleanup(pluginSettings.claimPlugins(isThemePlugin))
+}
+
+// In a screen
+<pluginSettings.PluginsPage match={isThemePlugin} onBrowse={openBrowseThemes} />
+```
+
+A match function gets a `PluginMatchInfo` with `id`, `name`, `description`, `author`, and `dependencies`. For repository listings, these come from the default channel's version.
+
+These types are not in the main types package. Add `@valenced/types/plugins/settings.plugins` to your `tsconfig.json` `types` to use them.
+
+<Callout title="Utils moved to unscoped">
+    `utils` used to come from a separate `valenced.api.utils` plugin. It is now always part of `unscoped`, and `valenced.api.json-storage` and `valenced.api.discord` were merged into `valenced.api`.
+</Callout>
+
+## `SettingsComponent`
+
+An optional React component property in your plugin definition that renders your plugin's configuration page:
+
+```tsx
+SettingsComponent({ api }: { api: PluginApi }) {
+    const settings = api.jsonStorage.use()
+    // ...
+}
+```
+
+## Type definitions
+
+When consuming decorated APIs, parameterize `PluginApi` with your configuration types:
+
+```ts
+import type { PluginApi } from '@valenced/plugins/types'
+
+interface MySettings {
+    enabled: boolean
+}
+
+// api: PluginApi<{ jsonStorage: MySettings }>
+// api.jsonStorage: JsonStorage<MySettings>
+```

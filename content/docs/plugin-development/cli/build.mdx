@@ -1,0 +1,153 @@
+---
+title: build
+description: Bundle plugin JavaScript into the single expression that the client evaluates.
+icon: Package
+---
+
+`valenced-plugin build` packages your plugin's JavaScript source code using [Rolldown](https://rolldown.rs/). It bundles each plugin into a single file at `plugins/<name>/build/js/index.js`. If you're building with Gradle, the packaging tasks run this command automatically before assembling the final plugin ZIPs.
+
+```sh
+valenced-plugin build [names...] [--dev] [--plugins-dir <dir>]...
+```
+
+## Flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `[names...]` | all plugins | Specific plugin folder names to build (matches the directory name, not the plugin ID). |
+| `--dev`, `-d` | `false` | Builds an unminified development bundle with `__DEV__` set to `true`. |
+| `--plugins-dir <dir>` | `plugins` | Path to the directory containing your plugin folders. Repeat it to build from several directories, such as `--plugins-dir plugins --plugins-dir themes`. |
+| `--help`, `-h` | | Displays help information. |
+
+```sh
+bun run build                                   # build all plugins
+bun run build example-plugin example-js-plugin  # build specific plugins
+bun run build:dev                               # build all plugins in development mode
+```
+
+## How plugins are discovered
+
+When you run `build`, the CLI scans each folder inside your plugins directory for a `manifest.json`. It will skip a folder if:
+
+1. There is no `manifest.json` present.
+2. The manifest doesn't specify a `dist.script` (indicating a native-only plugin).
+3. The manifest defines `dist.script`, but no matching entry file exists. In this case, the CLI logs a warning and proceeds with the remaining plugins.
+
+## Entry file resolution
+
+For each plugin with a JavaScript component, the CLI automatically detects the entrypoint by looking for these file names in order:
+
+```text
+js/index.ts      js/index.tsx      js/index.js      js/index.jsx
+src/index.ts     src/index.tsx     src/index.js     src/index.jsx
+index.ts         index.tsx         index.js         index.jsx
+```
+
+## Output format and exports
+
+Unlike typical web bundles, the compiled JavaScript output is formatted as a single self-contained expression rather than an ESM module or standalone script. 
+
+When Valenced loads your plugin, it evaluates it via `new Function('valenced', 'return ' + code)`. This means `valenced` is passed in as a function argument rather than living on the global window scope.
+
+Because of this evaluation model, your entry file **must** provide a default export:
+
+```ts title="plugins/example-js-plugin/js/index.ts"
+export default plugin({
+    start() {},
+})
+```
+
+<Callout type="warn" title="Always use export default">
+    Calling `plugin({ ... })` without `export default` will generate a bundle that exports nothing. Since the client would receive `undefined` and register a blank plugin with no lifecycles, the CLI catches this at build time and throws an error.
+</Callout>
+
+## Import mapping
+
+Discord doesn't run a standard package resolver or Node-style module loader. Instead, the Valenced host injects APIs directly through properties on the `valenced` argument. During compilation, the CLI automatically rewrites your `@valenced/*` imports into property lookups:
+
+```ts
+import { Design } from '@valenced/discord/design'
+// Rewritten to: valenced.discord.design.Design
+```
+
+The CLI gets these exact property paths from `@valenced/types/modules.importmap.json`. Because the import map is validated against Valenced's generated types during build, your imports are guaranteed to stay in sync with the client.
+
+<Callout type="warn" title="Don't guess property paths">
+    Always rely on the official import map rather than guessing property names from package paths. For instance, `@valenced/externals/browserify` resolves to `valenced.externals.Browserify`, and `@valenced/plugins/_` maps to `valenced.hidden.plugins.internal`. If an import isn't present in `@valenced/types`, the CLI will throw an error to prevent runtime failures.
+</Callout>
+
+### Bundled third-party packages
+
+Valenced bundles several popular libraries for plugins to use. The CLI automatically maps imports from these packages to their host equivalents:
+
+| Import | Runtime property |
+| --- | --- |
+| `react` | `valenced.react.React` |
+| `react-native` | `valenced.react.ReactNative` |
+| `react/jsx-runtime` | `valenced.react.ReactJSXRuntime` |
+| `@shopify/flash-list` | `valenced.externals.Shopify.FlashList` |
+| `@react-native-clipboard/clipboard` | `valenced.externals.ReactNativeClipboard.Clipboard` |
+| `@react-navigation/native` | `valenced.externals.ReactNavigation.ReactNavigationNative` |
+| `@react-navigation/stack` | `valenced.externals.ReactNavigation.ReactNavigationStack` |
+
+Because JSX is compiled with React's automatic runtime (`react/jsx-runtime`), you don't need to manually import React in `.tsx` files just to use JSX tags.
+
+### Default-export modules
+
+Some packages (such as `@valenced/components/*`) only provide a single default export. For these modules, the runtime property itself represents the component or helper, so you should import them as a default import:
+
+```ts
+import Page from '@valenced/components/Page' // Correct: valenced.components.Page
+
+import * as Page from '@valenced/components/Page' // Error: rejected by the CLI
+import { Foo } from '@valenced/components/Page' // Error: rejected by the CLI
+```
+
+For standard modules that export multiple utilities, the property maps to the module namespace, and a default import safely resolves `.default`.
+
+### Type-only imports
+
+Modules ending in `/types` (like `@valenced/plugins/types`) exist purely for TypeScript and contain no runtime code. The CLI strips these imports during the build:
+
+```ts
+import type { PluginApi } from '@valenced/plugins/types'
+import { PluginApi } from '@valenced/plugins/types' // Both produce identical output
+```
+
+Using `import type` is still recommended as a best practice to make your intent explicit.
+
+### Internal & hidden modules
+
+Valenced includes hidden modules that expose low-level client internals for debugging. These APIs are experimental and may change without notice. To use them, include the hidden type definitions:
+
+```json title="tsconfig.json"
+{
+    "compilerOptions": {
+        "types": ["@valenced/types", "@valenced/types/hidden"]
+    }
+}
+```
+
+You must also declare `valenced.api.hidden` in your plugin manifest dependencies. Because hidden APIs require users to enable **Developer Mode** in their Valenced settings, you should mark this dependency as optional (`"optional": true`) and gracefully handle cases where it isn't available.
+
+## Inlining assets
+
+Importing assets directly into your JavaScript or TypeScript files is supported out of the box:
+
+| Extension | Bundled result |
+| --- | --- |
+| `.json` | Inlined as a parsed JavaScript object. |
+| `.png`, `.jpg`, `.jpeg`, `.webp`, `.svg` | Inlined as a base64 `data:` URI string. |
+
+```ts
+import icon from './icon.png' // Resolves to "data:image/png;base64,..."
+```
+
+## Development vs. production builds
+
+Passing the `--dev` flag configures the build for faster iteration and easier debugging:
+
+- **Environment variables:** Sets `__DEV__` and `IS_DEV` to `true` (in production builds, these are set to `false`).
+- **Minification:** Skips aggressive variable mangling and only removes unreachable code, keeping stack traces and inspected bundles readable.
+
+Note that development and production builds write to the same output file (`build/js/index.js`). Always run a fresh production build (`bun run build`) before packaging or publishing your plugin for release.

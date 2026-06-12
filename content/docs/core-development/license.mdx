@@ -1,0 +1,25 @@
+---
+title: License
+description: Licensing information for Valenced repositories.
+icon: Scale
+---
+
+Valenced repositories use the following open-source licenses:
+
+| Repository | License | Summary |
+| --- | --- | --- |
+| [valenced](https://github.com/Valenced/valenced/blob/main/LICENSE) (loaders, `core/`) | **GPL-3.0** | Copyleft: derivative works must use GPL-3.0 and publish source code. |
+| [valenced `bundle/`](https://github.com/Valenced/valenced/blob/main/bundle/LICENSE) | **GPL-3.0** | Copyleft: derivative works must use GPL-3.0 and publish source code. |
+| [revenge-devtools](https://github.com/revenge-mod/revenge-devtools/blob/main/LICENSE) | **CC0-1.0** | Public domain dedication. |
+
+Refer to the `LICENSE` file in each repository for legal terms.
+
+## Implications for plugin developers
+
+- **Plugin code ownership:** Compiling against `@valenced/*` types and invoking runtime APIs does not require plugins to use GPL-3.0. You may license external plugins under your preferred license (the official plugin repository requires open source).
+- **Code reuse:** If you copy or adapt code from the Valenced bundle directly into a plugin, the resulting plugin must comply with GPL-3.0 requirements.
+- **Forks:** Forks of Valenced core components must maintain the respective repository licenses and publish source code.
+
+## Trademarks
+
+Valenced modifies the client runtime but does not redistribute the Discord application. Discord is a trademark of Discord Inc. Valenced is not affiliated with or endorsed by Discord.

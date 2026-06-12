@@ -1,0 +1,169 @@
+---
+title: Themes
+description: How the Themes API applies colors, backgrounds, fonts, icons, and emoji across JavaScript and native.
+icon: Palette
+---
+
+Theming lives in one plugin, `valenced.api.themes`, with a native half and a JavaScript half. Theme plugins depend on it and register their themes through `api.themes`. A second plugin, `valenced.settings.themes`, draws the Themes screen. See the [Themes API reference](/docs/plugin-development/api-reference/themes) for the plugin-facing side.
+
+## Where it lives
+
+Both plugins live in the [community plugins repository](https://github.com/Valenced/valenced-community-plugins), under `plugins/api.themes`, `plugins/settings.themes`, and `plugins/themes.legacy`. They use only public APIs, on both sides:
+
+- The JavaScript half can't use hidden modules, since those only exist in Developer Mode.
+- The native half uses the public `app.valenced:api` with `org.json`, and its own hook helpers.
+
+Core ships both as [stubs](/docs/core-development/architecture/repositories#stub-plugins) with a default source. The `valenced.settings.themes` stub is enabled by default. When it starts, it installs both plugins from the default repository. After the next reload, the installed copies replace the stubs.
+
+The settings plugin reaches the store through `api.themesInternal`, which the API plugin decorates for `valenced.settings.themes` only. It also depends on `valenced.settings.plugins` to [manage theme plugins](/docs/plugin-development/api-reference/plugin-api#pluginsettings-from-valencedsettingsplugins) on its own pages. The Plugins and Browse Plugins pages hide any plugin that depends on `valenced.api.themes`.
+
+## Why two halves
+
+Each kind of theme has to apply at a different point:
+
+| Kind | Applied by | When |
+| --- | --- | --- |
+| Colors (JavaScript) | JavaScript, by patching Discord's color tokens | Live, plus at every boot from saved values. |
+| Colors (native views) | Native, by hooking Discord's color resource lookups | Live, and before JavaScript runs. |
+| Backgrounds | JavaScript, through Discord's gradient theme components | Live. |
+| Fonts | Native, by hooking React Native's font manager | At boot. React Native caches typefaces. |
+| Icons | JavaScript asset overrides and native image hooks | At boot. React Native caches drawables. |
+| Emoji | Native, by hooking asset reads | At boot. Fresco caches images. |
+
+Fonts, emoji, and native colors must work before any JavaScript runs, so native can't wait for theme plugins to register. That shapes the design: JavaScript resolves a selection once, and native saves and applies the result.
+
+The API plugin can't start late. If a user enables it mid-session, it asks for a reload and stops, which also stops its dependents.
+
+## Selections
+
+The user picks one color theme, one icon pack, and one emoji pack. Fonts are picked per family, so one selection can mix packs. The JavaScript half resolves each pick into plain data, with no plugin code needed to apply it again:
+
+- **Colors:** The result of the theme's `getColors()`.
+- **Fonts:** For each picked family, the providing pack and its variants, with absolute paths, weights, italics, and axes.
+- **Icons:** Asset names mapped to absolute paths, plus the Android drawable names of those assets.
+- **Emoji:** An absolute image folder, a font path, or both.
+- **Background:** The user's own background settings, if any.
+
+JavaScript sends each one to native with `valenced.themes.setColors`, `setFonts`, `setIcons`, `setEmoji`, or `setBackground`, as JSON or `null`. Native saves them in `state.json` inside the plugin's storage directory:
+
+```jsonc
+{
+    "format": 1,
+    "colors": { "plugin": "<id>", "group": "<groupId>", "theme": "<themeId>", "values": { "semantic": {}, "raw": {} } },
+    "fonts": { "families": { "ggsans-Normal": { "plugin": "<id>", "group": "<groupId>", "pack": "<packId>", "variants": [{ "path": "...", "weight": 400, "italic": false, "axes": {} }] } } },
+    "icons": { "plugin": "<id>", "group": "<groupId>", "pack": "<packId>", "icons": { "SettingsIcon": "..." }, "drawables": { "...": "..." } },
+    "emoji": { "plugin": "<id>", "group": "<groupId>", "pack": "<packId>", "images": "...", "font": "..." },
+    "background": { "source": "custom", "path": "...", "opacity": 1, "blur": 0, "dimming": 0.7 }
+}
+```
+
+JavaScript reads it back at preinit with the sync `valenced.themes.getState`. Paths in packs are relative to the owning plugin's `dist/<id>/` directory and become absolute before saving.
+
+Selections clean up after themselves:
+
+- When a theme plugin stops, the decorator's cleanup removes its registrations and clears its selections.
+- When the owning plugin registers a selected theme or pack again, Valenced recomputes its values and saves them if they changed.
+
+A plugin disabled or uninstalled while it isn't running keeps its selections, since no public API reports that.
+
+### Font roles
+
+The Fonts page applies a whole pack. Under **Individual fonts**, users pick a pack per role or per family:
+
+| Role | Families |
+| --- | --- |
+| Sans serif | `ggsans-*`, `NotoSans-*` |
+| Monospace | `ggmono-*`, `SourceCodePro-*` |
+
+Picking a role restores Discord's fonts for the role's families the pack lacks. Other families, such as Discord's Ginto display font, are only on the per-family list. Discord's heading styles use the same fonts as body text, so there is no heading role.
+
+## Colors
+
+### JavaScript
+
+The JavaScript half patches Discord's tokens module, the one with `RawColor` and `SemanticColor`:
+
+- **Raw colors** replace entries in `RawColor` directly. `resolveSemanticColor` reads raw colors from that same object. The originals are kept, so clearing a theme restores them, and `getColors` receives them as `discord.raw`.
+- **Semantic colors** go through an `instead` hook on `tokens.default.internal.resolveSemanticColor(theme, color, context)`. It looks up the color's name for the requested base theme and returns the override. Profile theme colors pass through untouched, since users pick those.
+
+The tokens module may already be initialized by the time the plugin's `preInit` runs. The patch first looks for it with `initialize: false`, and only waits for it when the lookup misses.
+
+Discord caches resolved colors per theme context. The JavaScript half bumps the context's `key` to recolor most of the UI live. Some styles stay cached, so the Themes screen offers a reload after a pick.
+
+### Native
+
+Discord's native views read colors through its `getColorCompat` helpers, which resolve a color resource. Discord 352.2 and later are obfuscated, so native finds both helpers with `dexFinder` by signature and by the `Resources.getColor` or `Context.getColor` call inside.
+
+Native hooks both and maps each resource by its entry name:
+
+- A name like `text_normal_ash` is the semantic color `TEXT_NORMAL` of one base. The suffixes are `ash`, `dark`, `light`, and `onyx`.
+- Any other name, like `neutral_4`, is a raw color.
+
+Semantic colors only apply where Discord has a per-theme resource. Some theme getters read a palette color directly, so those only follow raw colors.
+
+Discord's theme objects cache their colors. On every change, native clears the static cache map that `ThemeModule.updateSaturation` reads, so native colors update live through `setColors`.
+
+The four bases map to Discord's internal names:
+
+| Base | Discord theme | Resource suffix |
+| --- | --- | --- |
+| `dark` | Ash | `ash` |
+| `darker` | Dark | `dark` |
+| `light` | Light | `light` |
+| `midnight` | Onyx | `onyx` |
+
+## Backgrounds
+
+A background comes from the user's own settings first, then the active color theme's `background`, then none.
+
+The JavaScript half reuses Discord's gradient theme mode, which already makes surfaces translucent:
+
+1. It swaps `useCustomThemeDisplaySettings` to return Discord's own settings, or else custom theme settings for the background. Nothing is saved to the user's Discord settings. Discord custom themes, previews, and server themes take priority.
+2. It swaps the `ThemedGradient` default export to draw the image, unless the caller passes `gradientOverride`, as the theme picker swatches do.
+3. It makes `useIsClientThemeOrCustomThemeActive` also return `true` while a background is active. Discord only counts saved custom themes, so lists wouldn't blend otherwise.
+4. It passes gradient metadata to semantic color contexts, and dims a fixed list of surface colors to the theme's `BACKGROUND_BASE_LOWER`, with the background's `dimming` as alpha.
+
+The swapped hooks run inside Discord components, which need a stable hook count. So they are only installed at preinit, never late, and never removed mid-session. Once stopped, they pass through.
+
+`valenced.themes.importBackground(uri)` copies an image the user picks into the plugin's storage, and deletes older imports no longer in use.
+
+## Fonts
+
+Native hooks `ReactFontManager.getTypeface(String, TypefaceStyle, AssetManager)`. Every React Native text style goes through it, and it still has the requested weight and italic before React Native reduces them to four styles. On obfuscated builds, native finds it by its parameter types and the `fontFamilyName` and `fonts/` strings, and finds the weight and italic fields of `TypefaceStyle` by type.
+
+For each call:
+
+1. Split the family name on commas into a fallback chain.
+2. If no name in the chain has a pack entry, return without changing anything.
+3. Build one `FontFamily` per name. A pack entry adds every variant with its weight, slant, and axis values. A name without an entry tries `fonts/<name>.ttf` or `.otf` from the app's assets, like React Native does. A `system-ui` entry uses the device font.
+4. Chain them with `Typeface.CustomFallbackBuilder` and set the requested style. Android picks the closest variant, and synthesizes bold or italic when none matches.
+5. Cache the result by name, weight, and italic.
+
+Below Android 10, native picks the closest variant of the first matching name instead: matching slant first, then the nearest weight, heavier on ties.
+
+The Themes screen previews fonts before a pick. `valenced.themes.previewFont` registers a pack's family under a `valenced-themes-preview:` name, which never collides with names the app requests.
+
+## Icons
+
+Icons need both realms, since images load through two paths:
+
+- **JavaScript:** For each icon, an asset override by name with a `file://` URI. Overrides by name apply even to assets registered later. See [Assets](/docs/plugin-development/api-reference/assets#asset-overrides).
+- **Native:** Release builds load packaged images as Android drawables. Native hooks the `ImageSource` constructor, which resolves the URI, and `ResourceDrawableIdHelper.getResourceDrawable`. A bare drawable name or a `drawable-*` bundle path that matches a pack icon resolves to the pack's file instead.
+
+## Emoji
+
+Discord draws Unicode emoji from 72-pixel Twemoji images in its APK assets, named like `emoji-1f600.png`. Fresco reads them as `asset:///` URIs through `AssetManager.open` and `openFd`.
+
+Native hooks those two framework methods, so the hook covers native and React Native images alike. For each emoji asset:
+
+1. It looks for an image with the same name in the pack's `images` folder, then for the name without `fe0f`.
+2. Otherwise, it draws the emoji with the pack's `font` into a 128-pixel image, cached in `emoji-cache/` inside the plugin's storage directory. `'system'` uses the device's emoji font.
+3. Otherwise, Discord's image loads as usual.
+
+`valenced.themes.previewEmoji` draws previews for the Themes screen. It copies Discord's originals straight from the APK, since a pack may be hooking the asset reads.
+
+## Stopping
+
+Stopping the plugin removes the font, icon, and emoji hooks and asks for a reload, since cached typefaces and images remain. It also restores native colors. The JavaScript half removes its color patch and asset overrides.
+
+Selections stay saved, so turning the plugin back on restores them.

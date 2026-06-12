@@ -1,0 +1,12 @@
+{
+  "title": "Getting Started",
+  "icon": "Compass",
+  "pages": [
+    "setting-up-your-environment",
+    "the-plugin-template",
+    "your-first-plugin",
+    "making-library-plugins",
+    "testing-your-plugin",
+    "publishing-your-plugin"
+  ]
+}

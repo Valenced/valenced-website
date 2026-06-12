@@ -1,0 +1,143 @@
+---
+title: Installing Add-ons
+description: How to install, manage, and remove add-ons in Valenced.
+icon: Puzzle
+---
+
+## What are add-ons?
+
+Add-ons are plugins and themes that customize your Discord client. They run inside the Valenced runtime, hooking into Discord to add features, adjust styling, or change behavior.
+
+Themes are plugins too. A theme plugin adds color themes, font packs, or icon packs that you can pick from the [Themes](#themes) screen.
+
+## Built-in plugins
+
+Valenced ships with built-in plugins for blocking tracking, enabling staff settings (experiments), recovering from crashes, and theming. You can view and toggle them under:
+
+**Settings > Valenced > Plugins**
+
+Some plugins are marked **essential** and cannot be disabled because Valenced requires them to function.
+
+Some built-in plugins can also receive updates from a repository, separately from Valenced. Once updated, their options show **Uninstall updates** instead of **Uninstall**. This removes the update and brings back the version that came with Valenced.
+
+## Installing external add-ons
+
+External add-ons come from the community, distributed through plugin repositories.
+
+### From repositories with built-in browser
+
+1. Open **Settings > Valenced > Plugins** and tap the **+** button at the bottom to open the **Browse Plugins** page. This lists every plugin available across your enabled repositories.
+2. Tap **Install** on a plugin. Valenced installs the newest version that works with your setup, which can be older than the newest release. If the plugin requires other plugins, Valenced displays the full install plan before downloading.
+
+To pick what gets installed, long press **Install** or open the plugin's menu. From there, you can choose the source repository and a channel or version to install, and view details like its ID.
+
+To manage repositories, tap the settings gear next to the Plugins header:
+
+- Add a repository by URL. Valenced fetches the index immediately so its plugins appear in Browse.
+- Turn a repository off with its switch. Its plugins stay installed, but Valenced stops browsing and updating from it until you turn it back on.
+- Use a repository's menu to move it up or down, refresh it, copy its URL, or remove it. When the same plugin exists in multiple repositories, higher repositories take precedence.
+  Duplicate entries may appear when a plugin exists in multiple repositories. You can still install from a specific repository by tapping Install for the entry.
+- A status icon next to a repository's name shows when it is refreshing or failed to refresh.
+- The built-in Valenced repository is always present and cannot be removed. If you removed the default community repository, tap **Restore default repository** under **Advanced** to add it back.
+
+Every download is verified against the SHA-256 checksum in the repository index before installation.
+
+### Sideloading
+
+You can also install a plugin ZIP directly:
+
+1. Open **Settings > Valenced > Plugins** and tap the settings gear near the header.
+2. Under **Advanced**, tap **Install from file** and select the ZIP file.
+3. Valenced validates the ZIP contents and asks for confirmation before installing.
+
+Sideloaded plugins have no repository attached, so they won't receive updates. You can update them by installing a newer ZIP file.
+If you remove a repository, plugins previously installed from it will remain installed as sideloaded plugins.
+
+<Callout type="warn" title="Plugins are code">
+    Plugins run with full access to your Discord client, including messages, account details, and auth tokens. Only install add-ons and add repositories from sources you trust.
+</Callout>
+
+## Updating plugins
+
+Plugin updates work like package updates:
+
+- Valenced checks your repositories for updates shortly after startup, at most once an hour. Turn this off with **Update plugins automatically** in the repository settings.
+- Turn on **Skip on metered networks** to skip automatic updates on mobile data and other metered connections.
+- Updates download, verify, and write to disk in the background while the current version continues running.
+- The updated version loads the next time you reload Discord. Until then, the plugin list shows a banner with a **Reload now** button.
+
+To check manually, tap **Check for updates** in the repository settings. When updates are available, tap **View updates** to open the **Plugin Updates** page. Select the plugins you want to update, then tap the update button.
+
+An update also installs or updates the plugins it needs. If an update would break another plugin, the Plugin Updates page warns you, and points to the update that fixes it when there is one. An update that needs a newer version of a plugin with paused updates can't install until you allow updates for that plugin.
+
+Freshly installed plugins are available immediately and will be in a disabled state. Enable them from the plugin list when you are ready to use them.
+
+### Channels, versions, and pausing updates
+
+Each installed plugin has an **Updates** section in its options. From there, you can:
+
+- **Switch repository:** Tap **Repository** to install the plugin from another repository that serves it.
+- **Get the newest compatible version:** Tap **Channel** or **Version** and pick a channel under **Newest compatible**, such as `latest` or `beta`. Valenced installs the newest version of the channel that works with your Discord version and your other plugins. This is the default.
+- **Follow a channel exactly:** Pick a channel under **Follow a channel**. Valenced installs exactly the version the channel points to. If that version doesn't work with your setup, the install fails. The row shows the channel as, for example, `latest (exact)`.
+- **Stay on a version:** Pick a specific version from the same list. This installs that version and pauses updates for the plugin.
+- **Pause updates:** Turn off **Allow updates** to keep the installed version. Other plugins can't update if they need a newer version of a paused plugin.
+
+When you follow a channel either way, updates install automatically as the channel moves. Automatic updates always pick the newest compatible version.
+
+The repository settings show how many plugins have their updates paused.
+
+## Managing add-ons
+
+From the plugin list, you can:
+
+- **Enable or disable** a plugin using its toggle switch. Most plugins start and stop immediately. Plugins can mark themselves as requiring an app reload to fully apply or revert changes.
+- **See statuses** at a glance. Icons on a plugin's card show when it needs a reload, has an update waiting for a reload, has paused updates, has an error, or is stopped.
+- **Open its options** by tapping the plugin. From there, you can open its **Settings**, **Start** or **Stop** it, **Clear Data**, or **Uninstall** it.
+- **View contacts** of the author and contributors by tapping the author's name.
+
+Uninstalling a plugin also removes its stored settings. If other enabled plugins use it, Valenced lists them before you confirm.
+
+## Themes
+
+Pick themes under **Settings > Valenced > Themes**. The screen has separate pickers for **Colors**, **Fonts**, **Icons**, and **Emoji**, so you can mix a color theme from one plugin with a font pack from another.
+
+The first time you open Valenced, it downloads the Themes plugins from the default repository. Themes need Discord 352.2 or later.
+
+- Each picker shows themes and packs in groups. Only one item per picker is active at a time.
+- Pick **Discord** in any picker to go back to Discord's own colors, fonts, icons, or emoji. **Reset** on the Themes screen resets every picker at once.
+- Some changes apply right away. Tap **Reload to apply changes** to apply the rest.
+- Stopping, disabling, or uninstalling a theme plugin resets the themes and packs it provided.
+
+Theme plugins don't show up on the Plugins page. Manage them with **Manage theme plugins** on the Themes screen, and tap **+** there to browse themes from your repositories.
+
+### Fonts
+
+**Fonts** applies a whole font pack. To mix packs, tap the settings icon on the Fonts page to open **Individual fonts**. There you can pick a pack for all **Sans serif** fonts, all **Monospace** fonts, or each font family on its own.
+
+### Backgrounds
+
+Some color themes come with a background image. Tap the settings icon on the Colors page to open **Background**, where you choose between **From theme**, **Custom image**, and **None**. A custom image works with any color theme, or without one. You can also change the opacity, blur, and dimming there.
+
+### Vendetta and Bunny themes
+
+Valenced can import themes and font packs made for Vendetta and Bunny:
+
+1. Install the **Legacy Themes** plugin from **Manage theme plugins** on the Themes screen.
+2. Open its settings and paste the URL of a theme or font pack JSON file.
+3. Pick the imported theme or font pack from the Themes screen.
+
+## Plugin dependencies
+
+Plugins can declare dependencies on other plugins. Valenced resolves dependencies automatically during install and startup. It refuses to start a plugin if its required dependencies are disabled, missing, or incompatible.
+
+When installing from a repository, dependencies appear in the install plan before confirmation.
+
+When you disable a plugin that others use:
+
+- Plugins that require it are disabled too.
+- Plugins that can work without it are listed, and you can choose which ones keep running. They restart without it.
+
+Valenced also offers a few follow-ups:
+
+- **Disable unused plugins:** After you disable a plugin, Valenced offers to disable the plugins that were enabled for it and that nothing else uses now.
+- **Restart plugins for features:** After you enable a plugin, Valenced offers to restart running plugins that could use it but started without it.

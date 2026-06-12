@@ -1,0 +1,30 @@
+---
+title: Updating Valenced
+description: How Valenced releases work and how to keep your installation up to date.
+icon: RefreshCw
+---
+
+## How updates work
+
+Valenced updates ship as **complete releases**: the loader, a prebuilt Valenced bundle, and the supported Discord version are tested and released together.
+
+- **Bundles are prebuilt and never updated over the network.** Each release ships the exact bundle it was built with, keeping builds reproducible and predictable.
+- **Plugins update independently.** External plugins update over the network through [plugin repositories](/docs/installing-plugins#updating-plugins). They download and verify in the background and apply on your next reload.
+- **Discord versions are pinned.** Each Valenced release targets a specific Discord version. Updating Valenced means moving to a release that supports a newer Discord build.
+
+To update Valenced, open the manager and re-patch when a new release is available. The manager downloads the matching Discord version and patches it.
+
+## Loading pre-release builds
+
+Release builds only ever run the bundle they were built with. [**Debug builds**](/docs/installation#debug-builds) of the loader can additionally load a development bundle:
+
+1. Start the bundle's development server with `deno run dev --lan` (see [Contributing](/docs/core-development/contributing#the-bundle)).
+2. Open **Settings > Developer** (under the **Valenced** section) and tap **Evaluate JavaScript**.
+3. Evaluate this snippet, with your computer's address:
+
+    ```js
+    var HOST = "http://<address>:4040";
+    valenced.discord.native.FileModule.writeFile("documents", "valenced/loader.json", JSON.stringify({ customLoadUrl: { enabled: true, url: HOST + "/valenced.bundle", manifestUrl: HOST + "/manifest.json" } }), "utf8");
+    ```
+
+4. Restart Discord. To go back to the shipped bundle, use **Reset Loader Config** in the [recovery options](/docs/troubleshooting/common-issues#opening-recovery-options).

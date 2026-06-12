@@ -1,0 +1,12 @@
+{
+  "title": "Plugin Development",
+  "icon": "Plug",
+  "root": true,
+  "pages": [
+    "index",
+    "getting-started",
+    "api-reference",
+    "cli",
+    "migrating-from-revenge"
+  ]
+}

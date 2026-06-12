@@ -1,0 +1,455 @@
+---
+title: Modules
+description: Find Discord's internal modules with finders and filters.
+icon: Search
+---
+
+Discord compiles JavaScript into thousands of anonymous Metro modules. `@valenced/modules` locates modules using property, name, and dependency graph filters.
+
+```ts
+import { lookupModule, lookupModules, waitForModules, getModules } from '@valenced/modules/finders'
+import { withProps, withName, withDependencies } from '@valenced/modules/finders/filters'
+```
+
+## Choosing a finder
+
+Three discovery primitives:
+
+| Target state | Function | Return value |
+| --- | --- | --- |
+| Already initialized | `lookupModule` / `lookupModules` | `[exports, id]` tuple or generator |
+| Initializing in the future | `waitForModules` | Unsubscribe callback |
+| Initialized or future | `getModules` | Unsubscribe callback |
+
+### `lookupModule(filter, options?)`
+
+Synchronously searches modules and returns the first match:
+
+```ts
+import { lookupModule } from '@valenced/modules/finders'
+import { withProps } from '@valenced/modules/finders/filters'
+
+const [React, ReactModuleId] = lookupModule(
+    withProps<typeof import('react')>('createElement'),
+)
+```
+
+<Callout type="warn" title="Check id, not exports">
+    A failed lookup returns an empty tuple (`[undefined, undefined]`). Check `id !== undefined` to detect whether a module matched.
+</Callout>
+
+`lookupModules(filter)` returns a generator yielding all matching modules:
+
+```ts
+for (const [exports, id] of lookupModules(withProps('open'))) {
+    console.log(id, exports)
+}
+```
+
+Options:
+
+```ts
+lookupModule(filter, {
+    cached: true,          // use cached lookup results (default: true)
+    initialize: false,     // avoid running factory on uninitialized matches
+    returnNamespace: true, // return module namespace rather than default export
+})
+```
+
+<Callout type="warn" title="`skipDefault` is deprecated">
+    The `skipDefault` option shared cached results with the same filter run without it, so it could return a `default` export match anyway. Wrap the filter in [`namespaceOnly`](#matching-the-namespace-only) instead. Valenced still accepts `skipDefault` and wraps the filter for you.
+</Callout>
+
+### `waitForModules(filter, callback, options?)`
+
+Listens for matching modules as they initialize and invokes the callback for each match until you explicitly unsubscribe. Does not invoke the callback for modules that are already initialized:
+
+```ts
+const unsub = waitForModules(
+    withName<typeof import('@shopify/flash-list')>('FlashList'),
+    (exports, id) => {
+        unsub() // unregister listener when finished
+    },
+)
+```
+
+Another plugin's earlier lookup can initialize a module before your `preInit` runs, and then `waitForModules` never fires. Check initialized modules first with `initialize: false`, which is safe at preinit, and only wait when that misses:
+
+```ts
+const [Tokens] = lookupModule(filter, { initialize: false })
+if (Tokens) patchTokens(Tokens)
+else {
+    const unsub = waitForModules(filter, Tokens => {
+        unsub()
+        patchTokens(Tokens)
+    })
+}
+```
+
+Exceptions thrown inside the callback are swallowed, so a failing patch fails silently.
+
+### `getModules(filter, callback, options?)`
+
+Invokes the callback immediately for already-initialized matches, then listens for future initializations. `getModules` defaults to `max: 1` (`options.max = 1`), unregistering automatically after matching `max` modules:
+
+```ts
+// Runs immediately if initialized, or once when initialized (defaults to max: 1)
+getModules(withProps<typeof import('react')>('createElement'), React => {
+    // single matching module
+})
+
+// Match multiple modules up to max limit
+getModules(withProps('registerAsset'), AssetsRegistry => {
+    // invoked for each matching module up to 2 times
+}, { max: 2 })
+```
+
+## Filters
+
+Filters match target module exports or metadata. Results cache across app restarts by filter key.
+
+### Property and name filters
+
+```ts
+import {
+    withProps, withoutProps, withSingleProp, withName,
+} from '@valenced/modules/finders/filters'
+
+withProps('createElement', 'cloneElement')  // all properties present
+withoutProps('init')                        // none of these properties present
+withSingleProp('FormSwitch')                // exactly this single property
+withName('Logger')                          // exports.name === 'Logger'
+```
+
+Type results using TypeScript generics:
+
+```ts
+const [FormSwitchModule] = lookupModule(
+    withSingleProp<{ FormSwitch: FC<FormSwitchProps> }>('FormSwitch'),
+)
+```
+
+### `withDependencies`: fingerprinting
+
+Matches modules by their dependency graph. This enables matching uninitialized modules without executing their factories:
+
+```ts
+import { withDependencies } from '@valenced/modules/finders/filters'
+import { ReactJSXRuntimeModuleId, ReactModuleId, ReactNativeModuleId } from '@valenced/react'
+import { ImportTrackerModuleId } from '@valenced/discord/common/import-tracker'
+
+const { partial, relative } = withDependencies
+
+// Exactly 3 dependencies: [ReactModuleId, <any>, ImportTrackerModuleId]
+withDependencies([ReactModuleId, null, ImportTrackerModuleId])
+
+// Relative IDs: first dependency is (this module ID - 1)
+withDependencies([relative(-1), null, ImportTrackerModuleId])
+
+// Nested: third dependency has zero dependencies
+withDependencies([ReactModuleId, null, []])
+
+// Partial: dependencies begin with [ReactModuleId, ...] (trailing length unconstrained)
+withDependencies(partial([ReactModuleId]))
+
+// Dynamic: resolve dependency module ID first
+const [, OpenerId] = lookupModule(withProps('open'))
+withDependencies([OpenerId, null, ImportTrackerModuleId])
+```
+
+Rules:
+
+- `null` matches any module ID at that position.
+- Dependency order and count match exactly unless wrapped in modifiers.
+- Structural matching does not initialize modules during evaluation.
+
+#### Modifiers
+
+Modifiers are helpers on `withDependencies` that wrap a map. They cover three independent questions.
+
+**Which slice of the dependency map is compared:**
+
+| Modifier | Meaning |
+| --- | --- |
+| none | the whole list |
+| `skip(n, deps)` | starts at index `n` |
+| `last(deps)` | the trailing `deps.length` dependencies |
+
+**How strictly the slice is matched:**
+
+| Modifier | Meaning |
+| --- | --- |
+| none | the slice must reach the end of the list |
+| `partial(deps)` | the slice may stop early. On its own this matches the **leading** dependencies, mirroring `last` |
+| `atLeast(n, deps)` | the module needs at least `n` dependencies. Implies `partial` |
+| `atMost(n, deps)` | the module needs at most `n` dependencies. Implies `partial` |
+
+**How entries are matched inside the slice:**
+
+| Modifier | Meaning |
+| --- | --- |
+| none | positional, one entry per dependency |
+| `ordered(deps)` | entries appear in order, with any gaps between them. `null` entries still consume one dependency |
+| `unordered(deps)` | entries appear anywhere, in any order. Much more expensive, so bound it with `atLeast` or `atMost` |
+
+```ts
+const { ordered, unordered, last, atLeast } = withDependencies
+
+// React, then the JSX runtime, then ImportTracker, with anything in between
+withDependencies(ordered([ReactModuleId, ReactJSXRuntimeModuleId, ImportTrackerModuleId]))
+
+// The last two dependencies are [<any>, ImportTrackerModuleId]
+withDependencies(last([null, ImportTrackerModuleId]))
+
+// At least 64 dependencies, and ReactModuleId is one of them
+withDependencies(atLeast(64, unordered([ReactModuleId])))
+```
+
+#### Relative entries
+
+Discord emits a module's own generated helpers at adjacent IDs, so pin them relatively instead of by absolute ID:
+
+```ts
+const { relative } = withDependencies
+
+// Second dependency is this module's ID + 1
+withDependencies([null, relative(1)])
+
+// Second dependency is this module's ID + 2, + 3, or + 4
+withDependencies([null, relative.within(2, 4)])
+```
+
+`relative.within` matches a block of IDs instead of one, which survives a sibling module being inserted into the ID space between app versions. Keep the range small, and keep an exports filter as the primary anchor.
+
+Inside a nested map, a relative entry resolves against the **parent** dependency by default. Pass `root` to resolve against the module the lookup returns instead. Use `relative.withDependencies` to pin a nested map relatively and check its contents in one entry:
+
+```ts
+// The nested map's second entry is the matched module's own ID + 2,
+// not the nested dependency's ID + 2
+withDependencies([null, [null, relative(2, true)]])
+
+// One dependency at this module's ID + 1, which in turn has exactly [<any>, ReactModuleId]
+withDependencies([relative.withDependencies([null, ReactModuleId], 1)])
+```
+
+#### Surviving app updates
+
+Dependency maps shift when Discord adds or removes a dependency. A positional map breaks on the next insert, so prefer the durable forms:
+
+- Use `ordered` instead of a positional window when only the gaps change.
+- Use `relative.within` instead of `relative` when a co-located sibling can move.
+- Reach for `anyOf` with a second map only when the layout changed in a way neither can absorb, such as a reorder.
+
+### Combining filters
+
+Combine filters using either chainable methods (`.and()`, `.or()`) or standalone combinator functions (`allOf()`, `anyOf()` from `@valenced/modules/finders/filters`). Use whichever syntax is cleaner in your situation:
+
+```ts
+import { allOf, anyOf, withProps, withName, withDependencies } from '@valenced/modules/finders/filters'
+
+// Method chaining
+withProps('TableRow', 'Button')
+    .and(withDependencies(partial([null, null, ImportTrackerModuleId])))
+
+withProps('open').or(withName('Opener'))
+
+// Standalone combinators
+allOf(
+    withProps('TableRow', 'Button'),
+    withDependencies(partial([null, null, ImportTrackerModuleId])),
+)
+
+anyOf(
+    withProps('open'),
+    withName('Opener'),
+)
+
+// Assign a custom cache key to complex composite filters
+withProps('ME').and(withDependencies(...)).keyAs('my.plugin.Constants')
+```
+
+### Matching the namespace only
+
+Filters run against a module's namespace, then against its `default` export. `namespaceOnly` skips the `default` export:
+
+```ts
+import { namespaceOnly, withProps } from '@valenced/modules/finders/filters'
+
+// Matches { x }, but not { default: { x } }
+const [SomeModule] = lookupModule(namespaceOnly(withProps('x')))
+```
+
+It has its own cache key, `valenced.namespaceOnly(<key>)`, so its results never mix with the plain filter's. It also works inside `allOf` and `anyOf`. Uninitialized modules are left to the wrapped filter.
+
+### Caching
+
+Filter results (including "not found") are cached by filter key, making repeat lookups across app restarts nearly free. Caches are invalidated automatically when Discord updates. Use `keyAs()` to give complex composite filters a stable key.
+
+<Callout type="warn" title="Change the key when you change the filter">
+    The cache only knows the key. If you change a filter but keep its `keyAs()` key, lookups keep returning the old module until Discord updates. Pick a new key, or clear the cache at `cache/valenced/modules.<build>` in Discord's data directory.
+</Callout>
+
+## Writing your own filters
+
+`createFilterGenerator` turns a predicate into a filter generator:
+
+```ts
+import {
+    createFilterGenerator,
+    FilterScopes,
+} from '@valenced/modules/finders/filters'
+
+const withDisplayName = createFilterGenerator<[name: string]>(
+    ([name], id, exports) => exports?.displayName === name,
+    ([name]) => `my.plugin.displayName(${name})`,
+    FilterScopes.Initialized,
+)
+
+const [Component] = lookupModule(withDisplayName('MessageAccessories'))
+```
+
+| Argument | Purpose |
+| --- | --- |
+| `predicate` | `(args, id, exports, initialized) => boolean`. See [below](#never-infer-the-pass-from-exports) for `initialized`. |
+| `keyFor` | The cache key. Must be stable across restarts and unique per argument set. |
+| `defaultScopesFor` | `FilterScopes.Initialized`, `.Uninitialized`, `.All`, or a bitwise OR. Defaults to `Initialized`. See [scopes](#scopes). |
+
+The returned generator's filters get the usual `.and()`, `.or()`, `.keyAs()`, `.scope()` and `.new()` helpers.
+
+### Export shapes
+
+Valenced passes module exports to predicates directly as exported. It does not pre-filter nullish values, primitives, or proxies.
+
+Predicates may receive:
+
+| Export type | Source |
+| --- | --- |
+| `undefined`, `null` | Modules without default exports, or `module.exports = null`. |
+| `0`, `''`, `false`, numbers, strings | Primitive `module.exports` (common in internationalization tables and asset registrations). |
+| Functions | `module.exports = function () {}` (`typeof exports === 'object'` is not safe). |
+| Catch-all proxies | TurboModule registries returning values for any property access. |
+| Objects | Standard namespace objects. |
+
+Predicates execute twice per candidate: once against the namespace, and once against `exports.default`.
+
+```ts
+// Unsafe: throws on nullish exports
+([name], _, exports) =>
+    exports.getName?.length === 0 && exports.getName() === name
+
+// Total: safe against nullish values and primitives
+([name], _, exports) =>
+    typeof exports?.getName === 'function' &&
+    exports.getName.length === 0 &&
+    exports.getName() === name
+```
+
+Defensive predicate rules:
+
+- Use optional chaining (`exports?.foo`).
+- Check `typeof fn === 'function'` before invocation.
+- Guard `in` checks, `Reflect.ownKeys()`, and object spreads against primitives.
+- Account for `typeof null === 'object'`.
+
+### The `initialized` flag
+
+Predicates run in two scenarios:
+
+- **Exportsless pass:** Evaluates uninitialized modules using ID and dependency graphs.
+- **Exports pass:** Evaluates initialized module exports.
+
+Check the fourth argument, `initialized`. Do not check `exports === undefined`, since modules can export `undefined`:
+
+```ts
+([id], _, exports, initialized) => {
+    if (!initialized) return matchesFingerprint(id)
+    return exports?.foo === 'bar'
+}
+```
+
+<Callout type="info">
+    Filters without `FilterScopes.Uninitialized` only run in the exports pass, where `initialized` is always `true`.
+</Callout>
+
+### `isModuleExportBad`
+
+Use `isModuleExportBad` to filter out nullish exports and catch-all proxies:
+
+```ts
+import { isModuleExportBad } from '@valenced/modules/metro/utils'
+
+const withMyProps = createFilterGenerator<[prop: string]>(
+    ([prop], _, exports) => {
+        if (isModuleExportBad(exports)) return false
+        return prop in exports
+    },
+    ([prop]) => `my.plugin.props(${prop})`,
+)
+```
+
+### Exception handling
+
+When a predicate throws, the finder catches the error, logs a diagnostic with module ID and filter key, and treats the candidate as non-matching.
+
+### Scopes
+
+Scopes define which module pools a cold lookup inspects:
+
+| Scope | Target pool |
+| --- | --- |
+| `FilterScopes.Initialized` | Modules that have run their factory. |
+| `FilterScopes.Uninitialized` | Modules that have not yet run their factory. |
+| `FilterScopes.All` | All registered modules, including blacklisted entries. |
+
+Including `Uninitialized` declares that the predicate can evaluate matches without exports (using dependency graphs and IDs).
+
+#### Composite prefiltering
+
+When combining filters with `.and()`, an exportsless filter acts as a prefilter. It evaluates uninitialized candidates, and only matching IDs are initialized for the secondary filter:
+
+```ts
+withProps('TableRow', 'Button').and(withDependencies(partial([...])))
+```
+
+#### Blacklisted modules
+
+Modules exporting primitives or empty objects are blacklisted after initialization to skip redundant evaluation. `FilterScopes.All` bypasses the blacklist.
+
+## Metro utilities
+
+From `@valenced/modules/metro/utils` and `@valenced/modules/metro/subscriptions`:
+
+```ts
+isModuleInitialized(id)            // returns boolean
+getInitializedModuleExports(id)    // returns exports or undefined
+getModuleDependencies(id)          // returns array of dependency IDs
+isModuleExportBad(exports)         // checks for nullish values or catch-all proxies
+
+onModuleFirstRequired(id, cb)      // fires before module factory runs
+onModuleInitialized(id, cb)        // fires after module initializes
+onAnyModuleInitialized(cb)         // fires for all module initializations
+```
+
+## Path-based finders
+
+`@valenced/discord/utils/modules/finders` locates modules by imported source file paths:
+
+```ts
+import {
+    lookupModuleWithImportedPath,
+    waitForModuleWithImportedPath,
+    getModuleWithImportedPath,
+} from '@valenced/discord/utils/modules/finders'
+
+const [{ default: Logger }] =
+    lookupModuleWithImportedPath('modules/debug/Logger.tsx')
+
+getModuleWithImportedPath(
+    'modules/main_tabs_v2/native/settings/SettingsConstants.tsx',
+    SettingsConstants => {
+        // executes when settings module initializes
+    },
+)
+```
+
+Path-based lookups target modules already loaded by Discord. For modules loaded later in the lifecycle, use the `waitFor` or `get` variants.

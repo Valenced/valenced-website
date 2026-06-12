@@ -1,0 +1,18 @@
+{
+  "title": "Architecture",
+  "icon": "Cpu",
+  "pages": [
+    "index",
+    "native-loader",
+    "bridge",
+    "boot-sequence",
+    "module-system",
+    "patcher",
+    "plugin-system",
+    "plugin-states",
+    "repositories",
+    "recovery",
+    "themes",
+    "build"
+  ]
+}

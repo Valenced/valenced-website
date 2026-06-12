@@ -1,0 +1,229 @@
+---
+title: Themes
+description: Provide color themes, backgrounds, font packs, icon packs, and emoji packs from a plugin.
+icon: Palette
+---
+
+Themes in Valenced are plugins. Any plugin can provide color themes, font packs, icon packs, and emoji packs through the Themes API. Users pick them under **Settings > Valenced > Themes**, with a separate picker for each kind.
+
+The Themes API comes from the `valenced.api.themes` plugin. It decorates `api.themes` for plugins that depend on it, so declare it in your `manifest.json`:
+
+```json title="manifest.json"
+{
+    "format": 1,
+    "id": "com.example.my-theme",
+    "name": "My Theme",
+    "version": "1.0.0",
+    "dependencies": {
+        "valenced.api": { "version": ">=1 <2" },
+        "discord": { "version": "*" },
+        "valenced.api.themes": {}
+    },
+    "dist": {
+        "script": "index.js"
+    }
+}
+```
+
+`api.themes` is available from `preInit` onwards. Registrations belong to your plugin and end when it stops.
+
+<Callout title="Themes update separately from Valenced">
+    Valenced ships `valenced.api.themes` and the Themes screen (`valenced.settings.themes`) as [stubs](/docs/installing-plugins). The first time the Themes plugin starts, Valenced installs both from the default repository. They live in the [community plugins repository](https://github.com/Valenced/valenced-community-plugins) and need Discord 352.2 or later.
+</Callout>
+
+## Groups
+
+Everything you register lives in a group. A group shows as a section in each picker, and one group can hold every kind:
+
+```ts
+themes.registerGroup('ocean', {
+    name: 'Ocean',
+    description: 'Calm blues for every base theme.',
+})
+```
+
+`registerGroup` is optional. Without it, the group ID shows as its name. Users pick one item per kind across all groups.
+
+## Color themes
+
+```ts title="index.ts"
+export default plugin({
+    // Registering early refreshes a picked theme before Discord renders
+    preInit({ themes }) {
+        themes.registerGroup('ocean', { name: 'Ocean' })
+
+        themes.registerTheme('ocean', 'deep', {
+            name: 'Deep',
+            getColors: discord => ({
+                semantic: {
+                    dark: {
+                        BACKGROUND_BASE_LOWEST: '#0b1d2a',
+                        TEXT_DEFAULT: '#d6ecff',
+                    },
+                },
+                raw: {
+                    BRAND_500: '#2e8bc0',
+                },
+            }),
+        })
+    },
+})
+```
+
+- Valenced calls `getColors` when the user picks the theme, at each boot, and to draw previews in the picker. Keep it cheap and deterministic.
+- `getColors` receives Discord's own colors as `discord.raw`, without any theme applied. Use them to derive your colors from Discord's palette.
+- Registering a theme again with the same IDs updates it. If it is the picked theme, Valenced applies the new colors.
+
+### Colors
+
+```ts
+type ThemeBase = 'dark' | 'darker' | 'light' | 'midnight'
+
+interface ThemeColors {
+    /** Semantic colors per base. Bases left out keep Discord's colors. */
+    semantic?: Partial<Record<ThemeBase, Record<string, string>>>
+    /** Base-independent raw palette colors. */
+    raw?: Record<string, string>
+}
+```
+
+- Colors use `#RRGGBB` or `#RRGGBBAA`.
+- **Semantic colors** use Discord's semantic color names, such as `BACKGROUND_BASE_LOWEST` or `TEXT_DEFAULT`. Set them per base theme. A semantic color you leave out keeps Discord's value.
+- **Raw colors** use Discord's palette names, such as `BRAND_500`. They apply to every base theme.
+- The bases match Discord's theme names: `dark` is Ash, `darker` is Dark, `light` is Light, and `midnight` is Onyx.
+
+Many surfaces, such as cards and selected rows, use Discord's `OPACITY_*` colors over the base color. Recoloring the `NEUTRAL_*` scale alone leaves those unchanged.
+
+<Callout title="Some changes need a reload">
+    Colors apply right away in most places. Discord caches some styles, so the Themes screen offers a **Reload to apply changes** button after a pick.
+</Callout>
+
+### Backgrounds
+
+A color theme can show an image behind the main screens and chat:
+
+```ts
+themes.registerTheme('ocean', 'waves', {
+    name: 'Waves',
+    getColors: () => ({}),
+    background: {
+        path: 'assets/waves.png',
+        opacity: 0.8,
+        blur: 4,
+        dimming: 0.6,
+    },
+})
+```
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `path` | | Image path relative to your plugin's directory, an absolute path, or an `http(s)` URL. |
+| `opacity` | `1` | Image opacity from 0 to 1. |
+| `blur` | `0` | Blur radius. |
+| `dimming` | `0.7` | Opacity of the surfaces over the image, from 0 to 1. |
+
+Surfaces turn translucent over the image, like Discord's Nitro gradient themes. A theme with only a background and no colors keeps Discord's colors.
+
+Users can also set their own image on the **Background** screen, opened from the Colors page. Their image takes priority over the theme's.
+
+## Font packs
+
+A font pack maps a font family name that the app requests to the font files that replace it:
+
+```ts
+themes.registerFontPack('rounded', 'rounded', {
+    name: 'Rounded',
+    families: {
+        'ggsans-Normal': [
+            { path: 'assets/fonts/Rounded-Regular.ttf' },
+            { path: 'assets/fonts/Rounded-Italic.ttf', italic: true },
+        ],
+        'ggsans-Bold': [
+            { path: 'assets/fonts/Rounded-Bold.ttf', weight: 700 },
+            { path: 'assets/fonts/Rounded-BoldItalic.ttf', weight: 700, italic: true },
+        ],
+        'NotoSans-Normal': 'system-ui',
+    },
+})
+```
+
+- Each variant takes a `weight` (default `400`) and an `italic` flag (default `false`). Valenced picks the closest variant for each request.
+- For variable fonts, set axis values in `axes`, such as `{ wght: 600, slnt: -10 }`. `weight` and `italic` only label a variant, so set `wght` too.
+- Pass `'system-ui'` instead of a variant list to use the device font for a family.
+- Fonts apply after a reload, since the app caches fonts once loaded.
+
+Discord's sans-serif families are `ggsans-Normal`, `ggsans-Medium`, `ggsans-Semibold`, `ggsans-Bold`, and `ggsans-ExtraBold`, with `NotoSans` in the same weights. The monospace families are `ggmono-Normal`, `ggmono-Bold`, and `SourceCodePro`. Give each one upright and italic variants for full coverage.
+
+Users can apply a whole pack, or pick packs per role (**Sans serif** and **Monospace**) and per family under **Individual fonts**. Families a pack leaves out keep Discord's fonts.
+
+## Icon packs
+
+An icon pack maps Discord [asset names](/docs/plugin-development/api-reference/assets) to image files:
+
+```ts
+themes.registerIconPack('outlined', 'outlined', {
+    name: 'Outlined',
+    icons: {
+        SettingsIcon: 'assets/icons/settings.png',
+        TrashIcon: 'assets/icons/trash.png',
+    },
+})
+```
+
+Discord tints most icons, so only their shape shows. Icons apply after a reload.
+
+## Emoji packs
+
+An emoji pack replaces Discord's Unicode emoji with images, a font, or both:
+
+```ts
+themes.registerEmojiPack('examples', 'system', {
+    name: 'System',
+    font: 'system', // the device's emoji font
+})
+
+themes.registerEmojiPack('examples', 'custom', {
+    name: 'Custom',
+    images: 'assets/emoji',
+    font: 'assets/fonts/MyEmoji.ttf',
+})
+```
+
+- `images` is a folder of PNGs named like Discord's, such as `emoji-1f600.png`. Names without `fe0f` are found too.
+- `font` is an emoji font file, or `'system'` for the device's emoji font.
+- Images take priority, the font draws the rest, and Discord's own emoji cover anything left.
+
+## File paths
+
+Paths are relative to your plugin's directory, which holds the unpacked contents of your plugin ZIP. Absolute paths work too.
+
+Put the files in an `assets/` folder next to your `manifest.json`. The plugin template packages it into the ZIP. See [Shipping extra files](/docs/plugin-development/getting-started/the-plugin-template#shipping-extra-files).
+
+## How selections persist
+
+When a user picks a theme or pack, Valenced saves the resolved colors and file paths. The next boot applies them before your plugin runs, so fonts and native colors work from the first frame.
+
+When your plugin stops, Valenced removes everything it registered and resets every selection it provided.
+
+## Types
+
+Install the Themes API types:
+
+```sh
+bun add -d @valenced/themes-api@git+https://github.com/Valenced/valenced-themes-types.git
+```
+
+Then reference them, or add `@valenced/themes-api` to `compilerOptions.types` next to `@valenced/types`:
+
+```ts title="index.ts"
+/// <reference types="@valenced/themes-api" />
+
+import type { ThemeColors } from '@valenced/themes-api/types'
+```
+
+The types are generated from the Themes API plugin on every change, so their version matches the plugin's.
+
+## Importing Vendetta and Bunny themes
+
+The **Legacy Themes** plugin imports themes and font packs made for Vendetta and Bunny by URL. It registers them through this same API, so they show up in the Themes screen like any other theme. Legacy backgrounds become theme backgrounds.
+To port a legacy theme for good, convert its `semanticColors` and `rawColors` into a `ThemeColors` object and register it from your own plugin.

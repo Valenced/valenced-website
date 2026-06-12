@@ -1,0 +1,107 @@
+---
+title: Utils
+description: Helper utilities for callbacks, proxies, objects, trees, and React fibers.
+icon: PocketKnife
+---
+
+`@valenced/utils` contains shared helper modules, exposed via `api.unscoped.utils` or direct package imports:
+
+## Bit sets (`@valenced/utils/bitset`)
+
+Compact sets of non-negative integers, such as module IDs, backed by a `Uint32Array`:
+
+```ts
+import {
+    createBitSet, bitSetAdd, bitSetHas, bitSetRemove, bitSetGrow,
+} from '@valenced/utils/bitset'
+
+let ids = createBitSet(1024)
+bitSetAdd(ids, 42)
+bitSetHas(ids, 42)  // true
+bitSetRemove(ids, 42)
+
+// Grow before adding past the current capacity
+ids = bitSetGrow(ids, 4096)
+```
+
+## Callbacks (`@valenced/utils/callback`)
+
+```ts
+import { noop, asap } from '@valenced/utils/callback'
+
+noop()          // no-op function (default unregister handler)
+asap(fn)        // schedule callback via microtask queue
+```
+
+## Errors (`@valenced/utils/error`)
+
+```ts
+import { getErrorStack, getCurrentStack } from '@valenced/utils/error'
+
+getErrorStack(e)     // extract stack trace string from unknown thrown error, with its cause
+getCurrentStack()    // retrieve current execution stack string
+```
+
+## Objects (`@valenced/utils/object`)
+
+```ts
+import {
+    cloneDeep, mergeDeep,
+    defineLazyProperty, defineLazyProperties,
+} from '@valenced/utils/object'
+
+mergeDeep(target, partial)                        // recursive object merge
+defineLazyProperty(obj, 'key', () => calculate()) // compute once on first access
+```
+
+## Promises (`@valenced/utils/promise`)
+
+```ts
+import { sleep, sleepReject } from '@valenced/utils/promise'
+
+await sleep(1000)
+await Promise.race([task, sleepReject(5000)]) // 5-second timeout pattern
+```
+
+## Proxies (`@valenced/utils/proxy`)
+
+Lazy value wrappers that evaluate on first property access:
+
+```ts
+import { proxify, unproxify } from '@valenced/utils/proxy'
+
+export let TargetModule = proxify(
+    () => {
+        const [module] = lookupModule(withProps('targetProp'))
+        if (module) return (TargetModule = module)
+    },
+    { hint: {} },
+)!
+```
+
+Use `unproxify(value)` to force eager evaluation.
+
+## Trees (`@valenced/utils/tree`)
+
+Generic tree traversal utilities with configurable child selectors.
+
+## React (`@valenced/utils/react`)
+
+```ts
+import { findInReactFiber } from '@valenced/utils/react'
+```
+
+See [React](/docs/plugin-development/api-reference/react#fiber-utilities-valencedutilsreact).
+
+## Discord (`@valenced/utils/discord`)
+
+```ts
+import { lookupGeneratedIconComponent } from '@valenced/utils/discord'
+
+// Matches generated Discord icon component variants
+const CircleInformationIcon = lookupGeneratedIconComponent(
+    'CircleInformationIcon',
+    'CircleInformationIcon-secondary',
+    'CircleInformationIcon-primary',
+)
+```

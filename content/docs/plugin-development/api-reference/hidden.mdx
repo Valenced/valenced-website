@@ -1,0 +1,101 @@
+---
+title: Hidden API
+description: Access Valenced internals and experimental APIs.
+icon: EyeOff
+---
+
+Valenced is built with a strict separation between its **public API** (`@valenced/*`) and its **hidden API** (`@valenced/hidden`).
+
+While standard plugins should exclusively rely on the public API, advanced developer tools, diagnostic extensions, and deep debugging utilities may sometimes need access to Valenced's internals.
+This guide explains the concept behind the hidden API, when it is appropriate, and how to properly configure your plugin to be able to access it.
+
+## Why two different sets of APIs?
+
+Valenced's public API is designed for stability. It provides semantic guarantees and remains consistent across updates. 
+
+In contrast, the hidden API exposes low-level internals, such as raw Metro runtime patch structures, finder caches, internal plugin dependency graphs, and experimental hooks. This means:
+
+- **No stability guarantees:** Methods, properties, and internal modules in the hidden API can change, break, or be removed between builds and releases without prior notice or deprecation cycles.
+- **Excluded from standard import maps:** Hidden modules are excluded from the default `@valenced/types` `modules.json` and `modules.importmap.json`. They are mapped separately under `modules.hidden.json` and `modules.hidden.importmap.json`, resolving to `valenced.hidden.*` at runtime.
+- **For debugging and experimentation only:** It exists to support internal tooling, runtime diagnostics, and previewing experimental capabilities before they are promoted to the public API. It should not be used for standard end-user plugin features.
+
+## Developer Mode requirement
+
+To prevent normal users from running unstable plugins that could compromise their client stability, the hidden API is strictly gated behind an internal plugin: `valenced.api.hidden`.
+
+- **Development builds:** If Valenced is built in development mode (`__DEV__`), `valenced.api.hidden` is enabled automatically.
+- **Release builds:** On production builds, `valenced.api.hidden` is **disabled by default**. Users must explicitly go to **Settings > Valenced** and toggle on **Developer Mode**.
+
+When `valenced.api.hidden` is active, it decorates the unscoped API, exposing the internals under `api.unscoped.hidden`.
+It also exposes the whole unscoped API as the `valenced` global, so you can reach it from [DevTools](/docs/devtools) or a debugger console. Without Developer Mode, `globalThis.valenced` is undefined.
+If Developer Mode is turned off, this object remains undefined, and any plugin declaring a non-optional dependency on `valenced.api.hidden` will be blocked from starting.
+
+## How to depend on the Hidden API
+
+### 1. Declare the dependency in `manifest.json`
+
+Add `valenced.api.hidden` to your plugin's `manifest.json` under `dependencies`.
+
+<Callout type="warn" title="Always mark as optional unless strictly developer-only">
+    Unless your plugin is solely intended for developers and cannot function without internal debugging hooks, always set `"optional": true`.
+    This ensures your plugin can still start and provide basic functionality even if the user does not have Developer Mode enabled.
+</Callout>
+
+```json title="manifest.json"
+{
+    "format": 1,
+    "id": "com.example.debugger",
+    "name": "Developer Debugger",
+    "version": "1.0.0",
+    "dependencies": {
+        "valenced.api": { "version": ">=1 <2" },
+        "discord": { "version": "*" },
+        "valenced.api.hidden": { "optional": true }
+    }
+}
+```
+
+Declaring this dependency ensures your plugin will start once the property has been configured.
+The hidden API is accessible to all plugins regardless of whether they depend on `valenced.api.hidden` or not.
+
+### 2. Configure TypeScript types
+
+The hidden API type definitions are not included in `@valenced/types` by default. Add `@valenced/types/hidden` to your `tsconfig.json` `types` array:
+
+```json title="tsconfig.json"
+{
+    "compilerOptions": {
+        "types": [
+            "@valenced/types",
+            "@valenced/types/hidden"
+        ]
+    }
+}
+```
+
+This supplies TypeScript definitions for modules imported from `@valenced/hidden` and typing for `api.unscoped.hidden`.
+
+### 3. Consume the API safely
+
+Because the dependency may be optional, always check for the presence of the API before calling it:
+
+```ts title="index.ts"
+export default plugin({
+    start({ unscoped, logger }) {
+        if (unscoped.hidden) {
+            logger.log('Developer Mode is active: internal APIs available')
+            // Access internal runtime caches or diagnostic hooks via unscoped.hidden
+        } else {
+            logger.warn('Developer Mode is disabled: internal debugging hooks bypassed')
+        }
+    },
+})
+```
+
+If you compile your plugin using the `@valenced/plugin-cli`, you can also import directly from `@valenced/hidden/*` modules; the compiler will automatically map them to `valenced.hidden.*` properties at build time.
+
+## Best practices
+
+- **Treat as volatile:** Assume any hidden API can break on the next app restart or Valenced update. Wrap calls in defensive guards or try-catch blocks.
+- **Graceful degradation:** Provide sensible fallbacks or informative error messages when `unscoped.hidden` is unavailable instead of crashing the plugin.
+- **Propose public alternatives:** If your plugin relies on a hidden feature that would benefit the broader ecosystem, open an issue or pull request in the Valenced repository to discuss promoting it to the official `@valenced/*` public API.

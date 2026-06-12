@@ -1,0 +1,14 @@
+{
+  "title": "User Guide",
+  "icon": "User",
+  "root": true,
+  "pages": [
+    "---User Guide---",
+    "index",
+    "introduction",
+    "installation",
+    "updating-valenced",
+    "installing-plugins",
+    "troubleshooting"
+  ]
+}

@@ -1,0 +1,106 @@
+---
+title: Setting Up Your Environment
+description: Set up tools and dependencies for Valenced plugin development.
+icon: Hammer
+---
+
+## Prerequisites
+
+- **JavaScript runtime:** [Bun](https://bun.com/), or [Node.js](https://nodejs.org/) (22.18+).
+- **Java & other tooling:** JDK 25+ and optionally Android SDK (platform 36) for native Android development. Native plugins also need a [GitHub token](#native-api) to fetch the Valenced API.
+- **Test device:** Android device or emulator with Valenced installed (see [Installation](/docs/installation)).
+- **Editor:** Visual Studio Code or any editor with TypeScript LSP support.
+
+## Using the plugin template
+
+The [Valenced Plugin Template](/docs/plugin-development/getting-started/the-plugin-template) is the official starter monorepo supporting JavaScript, TypeScript, and native Kotlin plugins.
+
+Make a repository from the [template repository](https://github.com/Valenced/valenced-plugin-template) and clone that repository:
+
+```sh
+git clone https://github.com/<your-name>/valenced-plugin-template my-plugins
+# or without a GitHub account: git clone https://github.com/Valenced/valenced-plugin-template my-plugins
+cd my-plugins
+bun install # or npm install
+```
+
+### Native API
+
+Native plugins compile against the Valenced API (`app.valenced:api`). Valenced publishes it to GitHub Packages, which needs authentication even for public packages:
+
+1. Make a GitHub [personal access token](https://github.com/settings/tokens) with the `read:packages` scope.
+2. Add your username and the token to `~/.gradle/gradle.properties`:
+
+```properties title="~/.gradle/gradle.properties"
+GitHubPackagesUsername=YOUR_GITHUB_USERNAME
+GitHubPackagesPassword=YOUR_PERSONAL_ACCESS_TOKEN
+```
+
+`gradle/libs.versions.toml` in the template pins the API version (`valencedApi`). In GitHub Actions, the template uses `GITHUB_ACTOR` and `GITHUB_TOKEN` instead.
+
+To build against an unpublished API, publish it to your local Maven repository from the [Valenced monorepo](https://github.com/Valenced/valenced). The API depends on `app.valenced:core`, so publish both:
+
+```sh
+git clone https://github.com/Valenced/valenced
+cd valenced
+./gradlew :core:publishToMavenLocal :android:api:publishToMavenLocal
+```
+
+Then add `mavenLocal()` to the `dependencyResolutionManagement` repositories in the template's `settings.gradle.kts`, and set `valencedApi` to the version you published.
+
+## TypeScript types
+
+Valenced publishes type declarations under `@valenced/types`. Add the types package to your `tsconfig.json`:
+
+```json title="tsconfig.json"
+{
+    "compilerOptions": {
+        "types": ["@valenced/types"]
+    }
+}
+```
+
+To enable type definitions for internal and debugging APIs, add `@valenced/types/hidden`:
+
+```json title="tsconfig.json"
+{
+    "compilerOptions": {
+        "types": ["@valenced/types", "@valenced/types/hidden"]
+    }
+}
+```
+
+## Runtime imports
+
+Plugins import from `@valenced/*` packages at build time. At runtime, Discord has no package resolver, so the entire API attaches to the `valenced` global object.
+Your bundler rewrites imports to property accesses on `valenced`, following the import map generated from the type definitions.
+
+The table below provides a few common examples (this list is non-exhaustive):
+
+| Import | Runtime property |
+| --- | --- |
+| `@valenced/patcher` | `valenced.patcher` |
+| `@valenced/modules/finders` | `valenced.modules.finders` |
+| `@valenced/discord/modules/main_tabs_v2` | `valenced.discord.modules.mainTabsV2` |
+| `@valenced/react/jsx-runtime` | `valenced.react.jsxRuntime` |
+| `@valenced/externals/shopify` | `valenced.externals.Shopify` |
+| `@valenced/externals/react-navigation` | `valenced.externals.ReactNavigation` |
+
+The complete mappings are defined in the `.importmap.json` files published by `@valenced/types` (such as `modules.importmap.json` for public packages and `modules.hidden.importmap.json` for internal modules). The plugin template uses these files during bundling to rewrite package imports to their exact runtime properties automatically.
+
+<Callout type="warn" title="Never derive a property path from a module path">
+    The import map is the only source of truth. Most paths look derived, but some are not. For instance, `@valenced/externals/*` maps to `PascalCase` properties, and `@valenced/plugins/_` maps to `valenced.hidden.plugins.internal`.
+</Callout>
+
+See [build](/docs/plugin-development/cli/build#import-mapping) for detailed import mapping rules.
+
+## DevTools
+
+Install the DevTools CLI for live debugging and module inspection:
+
+```sh
+bun install --global @revenge-mod/devtools-server
+revenge-devtools
+```
+
+Connect from your test device in **Settings > Valenced > Developer > Connect to DevTools**.

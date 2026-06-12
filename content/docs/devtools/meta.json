@@ -1,0 +1,6 @@
+{
+  "title": "DevTools",
+  "icon": "Wrench",
+  "root": true,
+  "pages": ["index", "features", "usage-guide"]
+}

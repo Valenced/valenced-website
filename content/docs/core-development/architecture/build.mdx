@@ -1,0 +1,172 @@
+---
+title: Build
+description: The bundle's build pipeline, source transforms, the bundle manifest, and type generation.
+icon: Hammer
+---
+
+The bundle (`bundle/` in the monorepo, Gradle project `:bundle`) builds with Deno and Rolldown, then compiles to Hermes bytecode. The build lives in `bundle/scripts/`. Gradle runs it and builds the result into every loader. See [The loaders](#the-loaders).
+
+## Layout
+
+Paths are relative to `bundle/`:
+
+```text
+lib/            # @valenced/* packages, the public API
+  assets/ components/ discord/ externals/ hidden/
+  json-storage/ modules/ patcher/ plugins/ react/ utils/
+src/            # The bundle itself
+  index.ts      # Entry: error handler and boot trap
+  preinit.ts    # Preinit stage
+  init.ts       # Init stage
+  start.ts      # Start stage
+  plugins/      # Bundled plugins: {preinit,init,start}/<name>/ with a manifest.json each
+scripts/        # Build, dev server, type generation
+shims/          # Module shims for react, react-native, and other Discord-bundled libraries
+types/          # Ambient TypeScript types
+build.env       # Committed build configuration (URLs)
+build.gradle.kts # The :bundle Gradle project
+```
+
+Each `lib/*` package has its own `package.json` with an `exports` map. Code imports other packages by package name, never by a relative path into them.
+
+## Pipeline
+
+`deno run build` (`scripts/build.ts`) runs these steps:
+
+1. **Generate assets** from `src/assets` into `dist/assets/generated`.
+2. **Bundle** `src/index.ts` with Rolldown as one IIFE for the browser platform, with tree shaking and constant inlining.
+3. **Transform** each module with Rolldown plugins, in this order:
+   1. `asRequire`: turns `// @as-require` imports into `require()` calls.
+   2. `shimAliases`: points `react`, `react-native`, and other shared libraries at `shims/`.
+   3. `importGlob`: expands `import.meta.glob`.
+   4. `hermesSwc`: compiles TypeScript and JSX to syntax Hermes supports, with SWC.
+   5. `importDefer`: turns `import defer` into lazy loaders.
+4. **Write** `dist/valenced.js`, minified with names kept so stack traces stay readable.
+5. **Compile** it to `dist/valenced.bundle` with `hermesc` (`hermesC` plugin).
+6. **Emit** the [bundle manifest](#bundle-manifest) to `dist/manifest.json`.
+
+Dev builds (`--dev`) skip minification, and compile with `-Og -g3` instead of `-O -g1`. `--out <dir>` writes the output somewhere other than `dist/`.
+
+`deno run dev` rebuilds on file changes and serves the bundle and manifest on port 4040, so a debug loader can load them through a custom bundle URL. It listens on `127.0.0.1` unless you pass `--lan`.
+
+## Source transforms
+
+### `@as-require`
+
+Bundlers hoist ESM imports to the top of a module. The boot stages need imports to run at an exact point, such as inside a callback. A comment marks them:
+
+```ts
+onModuleInitialized(0, () => {
+    // @as-require
+    import('./init')
+})
+```
+
+`asRequire` rewrites the marked `import 'x'` or `import('x')` into a synchronous `require('x')` at that spot.
+
+### `import defer`
+
+`import defer * as X from 'x'` loads a module only when code first reads a property of `X`. `importDefer` turns the namespace into a cached loader function and rewrites `X.foo` to `X().foo`. It parses the code with `rolldown/parseAst` rather than matching text.
+
+`importDefer` runs after `hermesSwc`, so it only sees compiled JavaScript. JSX is already function calls there. Keep that order. A deferred namespace inside a JSX element name, such as `<X.Foo />`, throws during the build.
+
+### Shims
+
+Discord's bundle already contains React, React Native, and libraries like FlashList. The bundle must use Discord's copies, not its own. `shims/` maps each import to a binding that Valenced fills once Discord's module initializes.
+
+Those bindings fill in late. React binds during preinit, so code that runs at preinit must not import `react` or anything that imports it. It would capture `undefined`.
+
+## Build constants
+
+The build defines these constants from environment variables. Values come from the committed `build.env`, and a local `.env` overrides them. With `--reproducible`, which Gradle always passes, the build reads only `build.env`:
+
+| Constant | Variable | Purpose |
+| --- | --- | --- |
+| `__DEV__` | `--dev` flag | Development build. |
+| `__BUILD_VERSION__`, `__BUILD_COMMIT__` | | The version from `package.json`, and the last commit that touched `bundle/`. |
+| `__BUILD_DEFAULT_PLUGIN_REPOSITORY_URL__` | `VALENCED_DEFAULT_PLUGIN_REPOSITORY_URL` | Default plugin repository. |
+| `__BUILD_DISCORD_SERVER_URL__`, `__BUILD_SOURCE_REPOSITORY_URL__`, `__BUILD_LICENSE_URL__`, `__BUILD_DONATE_URL__` | `VALENCED_*_URL` | Links in the settings UI. |
+| `__BUILD_FLAG_DEBUG_MODULE_LOOKUPS__` | `VALENCED_DEBUG_MODULE_LOOKUPS` | Logs module lookups. |
+| `__BUILD_FLAG_DEBUG_MODULE_WAITS__` | `VALENCED_DEBUG_MODULE_WAITS` | Tracks module waits. |
+| `__BUILD_FLAG_DEBUG_LAZY_VALUES__` | `VALENCED_DEBUG_LAZY_VALUES` | Logs lazy value evaluation. |
+| `__BUILD_FLAG_LOG_PROMISE_REJECTIONS__` | `VALENCED_LOG_PROMISE_REJECTIONS` | Logs unhandled promise rejections. |
+
+## Bundle manifest
+
+The native loader discovers plugins before the bundle runs. Without help, it can't tell a JavaScript-only bundled plugin from one that doesn't exist, so a required dependency on `valenced.settings` would fail. The bundle manifest fixes that.
+
+`scripts/manifest.ts` reads every `src/plugins/<stage>/<name>/manifest.json` and emits:
+
+```jsonc
+{
+    "version": "1.0.0",          // the bundle version, used for every listed plugin
+    "plugins": [
+        { "id": "valenced.api", "essential": true },
+        { "id": "valenced.no-track", "enabledByDefault": true },
+        {
+            "id": "valenced.recovery",
+            "essential": true,
+            "dependencies": { "valenced.settings": {} }
+        }
+    ]
+}
+```
+
+- It keeps only what native needs: ID, enablement, dependencies, and a `defaultSource` for [stub plugins](/docs/core-development/architecture/repositories#stub-plugins). Names and icons stay in JavaScript, except for stubs.
+- `"defaultSource": true` uses the default plugin repository (`VALENCED_DEFAULT_PLUGIN_REPOSITORY_URL`). An object sets `repo`, and optionally `channel` and `held`.
+- Stubs also keep `name`, `description`, `author`, `contributors`, and `icon`. Native needs them to show a restored stub before JavaScript fills them in.
+- A stub may set its own `version`, such as `"0.0.0"`. Other plugins always use the bundle version, and the build fails if they set one.
+- `"enabledByDefault": "dev"` resolves against the build being made, so the output only holds booleans.
+- Plugins with `build.devOnly` are left out of release builds.
+- The build fails on duplicate IDs, invalid `enabledByDefault` values, and dependencies on IDs that aren't internal plugins.
+
+JavaScript reads the same `manifest.json` files at preinit, so both realms agree on every bundled plugin.
+
+Gradle builds the manifest into each loader next to the bundle, so the two always match. Debug loaders with a custom bundle URL read the downloaded copy instead. See [Native Loader](/docs/core-development/architecture/native-loader#bundle-manifest).
+
+## Type generation
+
+`deno run types` generates `@valenced/types` in `dist/types`, the package plugin authors install. Besides type declarations, it writes:
+
+| File | Holds |
+| --- | --- |
+| `modules.json` | Every public module specifier. |
+| `modules.importmap.json` | Each public specifier mapped to its property path on the `valenced` global. |
+| `modules.hidden.json`, `modules.hidden.importmap.json` | The same for the [hidden API](/docs/plugin-development/api-reference/hidden). |
+
+The plugin template's bundler uses the import map to turn `@valenced/*` imports into `valenced.*` property reads.
+
+Module paths and property paths don't follow one rule. `@valenced/externals/browserify` is `valenced.externals.Browserify`, and two `metro` modules share `valenced.modules.metro`. `scripts/typegen/libs.ts` declares every pair by hand, and type generation fails when the declarations and the runtime API drift apart. Never derive one from the other with string rules.
+
+The import map only lists modules that have a property on `valenced`, so it is not an index of `modules.json`.
+
+## Checks
+
+```sh
+deno x tsc --noEmit -p .              # typecheck
+deno x biome check --write <paths>    # format and lint
+deno run test                         # tests for the patcher, filters, and build plugins
+```
+
+`scripts/` isn't typechecked, so build scripts enforce their rules by throwing at runtime.
+
+## The loaders
+
+The whole monorepo builds with Gradle from the repository root. `:bundle` (`bundle/build.gradle.kts`) wraps the Deno build:
+
+- It runs Deno from `PATH`, and fails unless its version matches `bundle/.dvmrc`.
+- It runs Deno with a minimal environment and `--reproducible`, so the host environment and `.env` can't change the output.
+- `assembleDebugBundle` builds with `--dev`, and `assembleReleaseBundle` builds a production bundle. Debug loaders ship the debug bundle, and release loaders ship the release bundle.
+- `--offline` runs Deno with `--cached-only`.
+
+The loaders consume the bundle as a Gradle artifact. `:android` copies `valenced.bundle` and `manifest.json` into the APK's assets, and `:ios:packageTweak` copies them next to the tweak's library.
+
+| Task | Does |
+| --- | --- |
+| `./gradlew :android:assembleDebug` | Builds the debug module APK, with the bundle. |
+| `./gradlew :android:testDebugUnitTest :core:testAndroidHostTest` | Runs the Android and shared unit tests. |
+| `./gradlew :bundle:testBundle` | Runs the bundle's tests. |
+| `./gradlew :core:publishToMavenLocal :android:api:publishToMavenLocal` | Publishes `app.valenced:core` and `app.valenced:api`, which native plugins compile against. |
+| `./gradlew :ios:packageTweak` | Builds the iOS tweak `.deb` with Theos. |
+
+The API version is `apiVersion` in `gradle/libs.versions.toml`, and the `valenced.api` provider plugin serves the same version.
