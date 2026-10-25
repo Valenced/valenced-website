@@ -162,6 +162,10 @@ export default defineConfig({
             preset: 'cloudflare_module',
             // Nitro doesn't minify the server bundle by default. A smaller Worker starts faster.
             minify: true,
+            commands: {
+                // Deployment hangs without this.
+                preview: 'node node_modules/wrangler/wrangler-dist/cli.js --cwd ./ dev',
+            },
         }),
     ],
     environments: {
