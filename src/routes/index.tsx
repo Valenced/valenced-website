@@ -7,14 +7,14 @@ import { Code, type LucideIcon, Palette, Plug, Shield, Smile } from 'lucide-reac
 import { Phone } from '@/components/Phone'
 import { baseOptions } from '@/lib/layout.shared'
 import { seoMeta } from '@/lib/seo'
-import { appName, discordUrl, homeOgImage, siteDescription } from '@/lib/shared'
+import { appName, discordUrl, siteDescription } from '@/lib/shared'
 
 export const Route = createFileRoute('/')({
     head: () => ({
         meta: seoMeta({
             description: siteDescription,
-            embedTitle: `${appName} • Custom themes and plugins for Discord mobile`,
-            image: homeOgImage,
+            embedTitle: appName,
+            thumbnail: '/og.webp',
             path: '/',
         }),
     }),

@@ -8,11 +8,7 @@ export function ogImagePath(slugs: string[]) {
     return slugs.length === 0 ? `/og${docsRoute}.webp` : `/og${docsRoute}/${slugs.join('/')}.webp`
 }
 
-export const siteDescription =
-    'Valenced is a client modification for Discord mobile. Whether you want to tweak the UI, block tracking, or load community plugins, Valenced gives you full control over your Discord mobile experience.'
-
-/** Path of the generated cover for the home page. */
-export const homeOgImage = '/og/home.webp'
+export const siteDescription = 'Make Discord mobile look and work the way you like, with custom themes and plugins.'
 
 export const discordUrl = 'https://discord.com/invite/dtBTQHYSx4'
 

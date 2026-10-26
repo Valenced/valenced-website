@@ -10,7 +10,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { ImageResponse } from '@takumi-rs/image-response'
-import { appName, homeOgImage, ogImagePath } from '../src/lib/shared'
+import { appName, ogImagePath } from '../src/lib/shared'
 
 interface DocsIndex {
     pages: Record<string, { title: string; description?: string; ogImage: string }>
@@ -113,43 +113,6 @@ function docsCard(title: string, description?: string) {
     )
 }
 
-const tilts = [-10, 0, 10]
-
-function phone(src: string, index: number) {
-    return (
-        <div
-            style={{
-                display: 'flex',
-                width: 262,
-                padding: 5,
-                borderRadius: 40,
-                backgroundColor: '#121214',
-                border: '1px solid rgba(255, 255, 255, 0.16)',
-                boxShadow: '0 0 48px rgba(0, 0, 0, 0.6)',
-                transform: `rotate(${tilts[index]}deg)`,
-                marginLeft: index === 0 ? 0 : -62,
-                marginTop: index === 1 ? 0 : 64,
-                zIndex: index === 1 ? 1 : 0,
-            }}
-        >
-            <img src={src} width={250} height={524} style={{ borderRadius: 34 }} />
-        </div>
-    )
-}
-
-function homeCard() {
-    return (
-        <div style={{ ...cardStyle, alignItems: 'center', paddingBottom: 0 }}>
-            {backdrop}
-            <p style={{ margin: 0, fontSize: 82, fontWeight: 600 }}>{appName}</p>
-            <p style={{ margin: 0, marginTop: 8, fontSize: 44, color: 'rgba(240,240,240,0.8)' }}>
-                Supercharge your Discord experience.
-            </p>
-            <div style={{ display: 'flex', marginTop: 40 }}>{screenshots.map(phone)}</div>
-        </div>
-    )
-}
-
 async function write(file: string, card: React.ReactElement) {
     const image = new ImageResponse(card, { width: 1200, height: 630, format: 'webp', fonts })
 
@@ -171,8 +134,6 @@ for (const [key, page] of Object.entries(index.pages)) {
 
     jobs.push(write(generated, docsCard(page.title, page.description)))
 }
-
-jobs.push(write(homeOgImage, homeCard()))
 
 await Promise.all(jobs)
 
