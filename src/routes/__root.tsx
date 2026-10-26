@@ -17,10 +17,17 @@ export const Route = createRootRoute({
                 content: 'width=device-width, initial-scale=1',
             },
             {
+                name: 'theme-color',
+                content: '#37EBFF',
+            },
+            {
                 title: appName,
             },
         ],
-        links: [{ rel: 'stylesheet', href: appCss }],
+        links: [
+            { rel: 'stylesheet', href: appCss },
+            { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+        ],
     }),
     component: RootComponent,
 })
