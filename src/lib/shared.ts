@@ -14,7 +14,8 @@ export const siteDescription =
 /** Path of the generated cover for the home page. */
 export const homeOgImage = '/og/home.webp'
 
-// fill this with your actual GitHub info, for example:
+export const discordUrl = 'https://discord.com/invite/dtBTQHYSx4'
+
 export const gitConfig = {
     user: 'Valenced',
     repo: 'valenced-website',
