@@ -2,7 +2,7 @@ import icons from 'virtual:content-icons'
 import { docs } from 'collections/server'
 import { loader } from 'fumadocs-core/source'
 import { createElement, type ReactNode } from 'react'
-import { docsRoute } from './shared'
+import { docsRoute, ogImagePath } from './shared'
 
 function resolveIcon<T extends { icon?: ReactNode }>(node: T) {
     if (typeof node.icon !== 'string') return node
@@ -53,6 +53,8 @@ export async function getDocsIndex() {
                 {
                     path: page.path,
                     title: page.data.title,
+                    description: page.data.description,
+                    ogImage: page.data.ogImage ?? ogImagePath(page.slugs),
                     markdownUrl: slugsToMarkdownPath(page.slugs).url,
                 },
             ]),

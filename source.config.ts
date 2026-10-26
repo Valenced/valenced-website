@@ -1,10 +1,14 @@
+import { pageSchema } from 'fumadocs-core/source/schema'
 import { defineConfig, defineDocs } from 'fumadocs-mdx/config'
 import { visit } from 'unist-util-visit'
+import { z } from 'zod'
 import type { Element, ElementContent, Root } from 'hast'
 
 export const docs = defineDocs({
     dir: 'content/docs',
     docs: {
+        // `ogImage` replaces the generated social cover  with a path under `public/` or an absolute URL.
+        schema: pageSchema.extend({ ogImage: z.string().optional() }),
         // Load page bodies lazily. Otherwise every page lands in any chunk that imports
         // `collections/server`, including the client bundle.
         async: true,

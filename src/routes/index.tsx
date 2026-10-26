@@ -1,9 +1,17 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { HomeLayout } from 'fumadocs-ui/layouts/home'
 import { baseOptions } from '@/lib/layout.shared'
-import { appName } from '@/lib/shared'
+import { seoMeta } from '@/lib/seo'
+import { appName, homeOgImage, siteDescription } from '@/lib/shared'
 
 export const Route = createFileRoute('/')({
+    head: () => ({
+        meta: seoMeta({
+            description: siteDescription,
+            image: homeOgImage,
+            path: '/',
+        }),
+    }),
     component: Home,
 })
 

@@ -8,7 +8,8 @@ import { Suspense } from 'react'
 import { useMDXComponents } from '@/components/mdx'
 import { ViewOptionsPopover } from '@/components/ViewOptionsPopover'
 import { baseOptions, docsTabs } from '@/lib/layout.shared'
-import { appName, gitConfig } from '@/lib/shared'
+import { seoMeta } from '@/lib/seo'
+import { docsRoute, gitConfig } from '@/lib/shared'
 import { type DocsIndex, getDocsIndex } from '@/lib/source'
 
 /**
@@ -40,8 +41,15 @@ export const Route = createFileRoute('/docs/$')({
 
         return { ...page, tree }
     },
-    head: ({ loaderData }) => ({
-        meta: loaderData?.title ? [{ title: `${loaderData.title} | ${appName}` }] : [],
+    head: ({ loaderData, params }) => ({
+        meta: loaderData?.title
+            ? seoMeta({
+                  title: loaderData.title,
+                  description: loaderData.description,
+                  image: loaderData.ogImage,
+                  path: [docsRoute, params._splat].filter(Boolean).join('/'),
+              })
+            : [],
     }),
 })
 
