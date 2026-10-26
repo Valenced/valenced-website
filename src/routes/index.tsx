@@ -8,6 +8,7 @@ export const Route = createFileRoute('/')({
     head: () => ({
         meta: seoMeta({
             description: siteDescription,
+            embedTitle: `${appName} — Supercharge your Discord experience`,
             image: homeOgImage,
             path: '/',
         }),

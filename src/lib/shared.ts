@@ -9,7 +9,7 @@ export function ogImagePath(slugs: string[]) {
 }
 
 export const siteDescription =
-    'Supercharge your Discord experience. Valenced is a client modification for Discord mobile.'
+    'Valenced is a client modification for Discord mobile. Whether you want to tweak the UI, block tracking, or load community plugins, Valenced gives you full control over your Discord mobile experience.'
 
 /** Path of the generated cover for the home page. */
 export const homeOgImage = '/og/home.webp'

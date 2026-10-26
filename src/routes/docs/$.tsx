@@ -9,7 +9,7 @@ import { useMDXComponents } from '@/components/mdx'
 import { ViewOptionsPopover } from '@/components/ViewOptionsPopover'
 import { baseOptions, docsTabs } from '@/lib/layout.shared'
 import { seoMeta } from '@/lib/seo'
-import { docsRoute, gitConfig } from '@/lib/shared'
+import { appName, docsRoute, gitConfig } from '@/lib/shared'
 import { type DocsIndex, getDocsIndex } from '@/lib/source'
 
 /**
@@ -46,6 +46,7 @@ export const Route = createFileRoute('/docs/$')({
             ? seoMeta({
                   title: loaderData.title,
                   description: loaderData.description,
+                  embedTitle: `${loaderData.title} | ${appName} Docs`,
                   image: loaderData.ogImage,
                   path: [docsRoute, params._splat].filter(Boolean).join('/'),
               })
