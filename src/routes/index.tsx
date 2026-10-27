@@ -51,6 +51,14 @@ const glow =
 const grid =
     'linear-gradient(to right, var(--color-fd-primary) 1px, transparent 1px), linear-gradient(to bottom, var(--color-fd-primary) 1px, transparent 1px)'
 const mask = 'radial-gradient(circle 720px at 88% -10%, black, transparent 75%)'
+const logoMask = {
+    maskImage: 'url(/logo.svg)',
+    maskSize: 'contain',
+    maskRepeat: 'no-repeat',
+    maskPosition: 'center',
+}
+const orbitMask = 'radial-gradient(circle 720px at 0% 100%, black, transparent 75%)'
+const orbits = [240, 400, 560, 720]
 
 function Home() {
     return (
@@ -67,9 +75,24 @@ function Home() {
                         className="pointer-events-none absolute inset-0 opacity-[0.07]"
                         style={{ backgroundImage: grid, backgroundSize: '56px 56px', maskImage: mask }}
                     />
+                    <div
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 opacity-[0.07]"
+                        style={{ maskImage: orbitMask }}
+                    >
+                        {orbits.map(size => (
+                            <div
+                                key={size}
+                                className="absolute bottom-0 left-0 -translate-x-1/2 translate-y-1/2 rounded-full border border-fd-primary"
+                                style={{ width: size, height: size }}
+                            />
+                        ))}
+                    </div>
                     <section className="relative mx-auto flex max-w-5xl flex-col items-center px-6 pt-20 text-center md:pt-28">
-                        <h1 className="text-2xl font-medium md:text-3xl">Supercharge your Discord experience.</h1>
-                        <p className="mt-5 max-w-2xl text-fd-muted-foreground md:text-lg">
+                        <h1 className="text-2xl font-medium md:text-3xl text-balance">
+                            Supercharge your Discord experience.
+                        </h1>
+                        <p className="mt-5 max-w-2xl text-fd-muted-foreground md:text-lg text-balance">
                             Make Discord look and work the way you like, with custom themes and plugins.
                         </p>
                         <div className="mt-8 flex flex-wrap justify-center gap-3">
@@ -90,28 +113,29 @@ function Home() {
                         </div>
                     </section>
 
-                    <div className="relative mt-16 flex h-[420px] justify-center">
+                    {/* Sizes scale with --phone so the hero shrinks on narrow windows */}
+                    <div className="relative mt-16 flex h-[calc(var(--phone)*1.6)] justify-center [--offset:calc(var(--phone)*0.244)] [--phone:clamp(192px,34vw,262px)]">
                         <div className="flex items-start">
                             <Phone
                                 eager
                                 src="/screenshots/server.webp"
                                 lightSrc="/screenshots/server-light.webp"
                                 alt="A Discord server themed with Valenced"
-                                className="mt-16 -rotate-10"
+                                className="mt-(--offset) w-(--phone) -rotate-10"
                             />
                             <Phone
                                 eager
                                 src="/screenshots/chat.webp"
                                 lightSrc="/screenshots/chat-light.webp"
                                 alt="A Discord channel running Valenced"
-                                className="relative z-10 -ml-16"
+                                className="relative z-10 -ml-(--offset) w-(--phone)"
                             />
                             <Phone
                                 eager
                                 src="/screenshots/themes.webp"
                                 lightSrc="/screenshots/themes-light.webp"
                                 alt="Valenced's theme settings"
-                                className="mt-16 -ml-16 rotate-10"
+                                className="mt-(--offset) -ml-(--offset) w-(--phone) rotate-10"
                             />
                         </div>
                     </div>
@@ -120,7 +144,7 @@ function Home() {
                 <section className="mx-auto max-w-5xl px-6 py-24">
                     <h2 className="text-3xl font-semibold tracking-tight">Make Discord yours</h2>
                     <p className="mt-3 max-w-xl text-fd-muted-foreground">
-                        Valenced patches the official Discord mobile app, so everything is familiar.
+                        Valenced patches the official Discord mobile app, so everything feels familiar.
                     </p>
                     <p className="mt-3 max-w-xl text-fd-muted-foreground">
                         Access Valenced's settings from Discord's settings menu, and install plugins and themes right
@@ -174,12 +198,7 @@ function Home() {
                     <div
                         aria-hidden
                         className="pointer-events-none absolute top-1/2 right-0 hidden size-64 -translate-y-1/2 bg-fd-foreground opacity-[0.01] md:block"
-                        style={{
-                            maskImage: 'url(/logo.svg)',
-                            maskSize: 'contain',
-                            maskRepeat: 'no-repeat',
-                            maskPosition: 'center',
-                        }}
+                        style={logoMask}
                     />
                     <h2 className="text-3xl font-semibold tracking-tight">Get started</h2>
                     <p className="mt-3 max-w-xl text-fd-muted-foreground">
