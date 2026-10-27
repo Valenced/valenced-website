@@ -14,8 +14,13 @@ function DiscordIcon() {
 export function baseOptions(): BaseLayoutProps {
     return {
         nav: {
-            // JSX supported
-            title: appName,
+            title: (
+                <div className="flex items-center gap-2">
+                    <img src="/nav.svg" alt="Navigation icon" aria-hidden className="size-6" data-dark-mode />
+                    <img src="/nav-light.svg" alt="Navigation icon" aria-hidden className="size-6" data-light-mode />
+                    {appName}
+                </div>
+            ),
         },
         links: [
             {
@@ -27,7 +32,7 @@ export function baseOptions(): BaseLayoutProps {
                 icon: <DiscordIcon />,
             },
         ],
-        githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
+        githubUrl: `https://github.com/${gitConfig.user}`,
     }
 }
 
