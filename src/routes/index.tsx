@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { cn } from 'cn'
-import { Card } from 'fumadocs-ui/components/card'
+import { Card as FDCard } from 'fumadocs-ui/components/card'
 import { buttonVariants } from 'fumadocs-ui/components/ui/button'
 import { HomeLayout } from 'fumadocs-ui/layouts/home'
 import { Code, type LucideIcon, Palette, Plug, Shield, Smile } from 'lucide-react'
@@ -8,6 +8,7 @@ import { Phone } from '@/components/Phone'
 import { baseOptions } from '@/lib/layout.shared'
 import { seoMeta } from '@/lib/seo'
 import { appName, discordUrl, siteDescription } from '@/lib/shared'
+import type { ComponentProps } from 'react'
 
 export const Route = createFileRoute('/')({
     head: () => ({
@@ -20,6 +21,15 @@ export const Route = createFileRoute('/')({
     }),
     component: Home,
 })
+
+function Card(props: ComponentProps<typeof FDCard>) {
+    return (
+        <FDCard
+            {...props}
+            title={props.title != null ? <span className="mb-1 text-lg font-medium">{props.title}</span> : undefined}
+        />
+    )
+}
 
 const features: { icon: LucideIcon; title: string; description: string; action?: { label: string; to: string } }[] = [
     {
@@ -154,7 +164,7 @@ function Home() {
                     <div className="mt-10 grid gap-3 md:grid-cols-3">
                         <Card
                             icon={<Palette />}
-                            title="Themes"
+                            title={'Themes'}
                             description="Change colors, fonts, icons and emoji, and mix them however you like."
                             className="flex flex-col overflow-hidden p-6 md:row-span-2"
                         >
@@ -182,7 +192,7 @@ function Home() {
                                             <Link
                                                 to="/docs/$"
                                                 params={{ _splat: action.to }}
-                                                className={buttonVariants({ color: 'secondary', size: 'sm' })}
+                                                className={cn(buttonVariants({ color: 'secondary', size: 'icon-sm' }))}
                                             >
                                                 {action.label}
                                             </Link>
